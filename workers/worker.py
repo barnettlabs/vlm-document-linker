@@ -1,0 +1,271 @@
+"""
+worker.py — Multi-model pipeline worker.
+
+Pulls files from Redis queue, runs them through all configured models
+in the pipeline, performs triage, and stores unified results.
+
+Configured via environment variables:
+  REDIS_HOST              Redis hostname (default: localhost)
+  QUEUE_NAME              Redis list to pull from
+  WORKER_ID               Label for logging
+  OUTPUT_DIR              Directory to write per-file JSON results
+  AUTO_ACCEPT_THRESHOLD   Confidence threshold for auto-accept (default: 0.85)
+"""
+
+import os
+import json
+import base64
+import time
+from datetime import datetime, timezone
+import redis
+import openai
+import fitz  # pymupdf
+from PIL import Image
+from pathlib import Path
+import io
+
+# -- Config ------------------------------------------------------------------
+REDIS_HOST = os.environ.get("REDIS_HOST", "localhost")
+QUEUE_NAME = os.environ.get("QUEUE_NAME", "queue:pending")
+WORKER_ID = os.environ.get("WORKER_ID", "worker")
+OUTPUT_DIR = Path(os.environ.get("OUTPUT_DIR", "/output"))
+MAX_RETRIES = 3
+AUTO_ACCEPT_THRESHOLD = float(os.environ.get("AUTO_ACCEPT_THRESHOLD", "0.85"))
+
+PROMPT = """You are extracting structured data from a government or legal document.
+
+Extract the primary license, certificate, or tracking number from this document.
+Look for fields labeled: Certificate No, License No, Tracking No, Permit No,
+Accreditation No, Case No, or similar identifier fields.
+
+Return ONLY valid JSON, no markdown, no explanation:
+{
+  "license_number": "the extracted number or null if not found",
+  "field_label": "the label of the field you found it in",
+  "confidence": 0.0
+}"""
+
+DEFAULT_PIPELINE = [
+    {"name": "qwen2.5vl:7b", "base_url": "http://ollama-qwen:11434/v1", "label": "Qwen 2.5 VL 7B"},
+]
+
+# -- Redis -------------------------------------------------------------------
+r = redis.Redis(host=REDIS_HOST, port=6379, decode_responses=True)
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def get_pipeline():
+    """Get pipeline config from Redis, or set and return default."""
+    raw = r.get("config:pipeline")
+    if raw:
+        return json.loads(raw)
+    r.set("config:pipeline", json.dumps(DEFAULT_PIPELINE))
+    return DEFAULT_PIPELINE
+
+
+# -- File handling -----------------------------------------------------------
+def file_to_base64(path: Path) -> tuple[str, str]:
+    """Convert any supported file to base64 JPEG for vision model ingestion."""
+    suffix = path.suffix.lower()
+
+    if suffix == ".pdf":
+        doc = fitz.open(str(path))
+        mat = fitz.Matrix(150 / 72, 150 / 72)
+        pix = doc[0].get_pixmap(matrix=mat)
+        data = pix.tobytes("jpeg")
+        return base64.b64encode(data).decode(), "image/jpeg"
+
+    elif suffix in {".jpg", ".jpeg"}:
+        with open(path, "rb") as f:
+            return base64.b64encode(f.read()).decode(), "image/jpeg"
+
+    elif suffix == ".png":
+        img = Image.open(path).convert("RGB")
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=85)
+        return base64.b64encode(buf.getvalue()).decode(), "image/jpeg"
+
+    else:
+        raise ValueError(f"Unsupported file type: {suffix}")
+
+
+# -- Model calling -----------------------------------------------------------
+def call_model(path: Path, model_config: dict) -> dict:
+    """Send image to a model endpoint and parse the JSON result."""
+    client = openai.OpenAI(base_url=model_config["base_url"], api_key="not-needed")
+    image_data, media_type = file_to_base64(path)
+
+    t0 = time.time()
+    response = client.chat.completions.create(
+        model=model_config["name"],
+        max_tokens=256,
+        temperature=0.0,
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:{media_type};base64,{image_data}"
+                        },
+                    },
+                    {"type": "text", "text": PROMPT},
+                ],
+            }
+        ],
+    )
+    elapsed = round(time.time() - t0, 2)
+
+    raw = response.choices[0].message.content.strip()
+
+    # Strip accidental markdown fences
+    if raw.startswith("```"):
+        raw = raw.split("```")[1]
+        if raw.startswith("json"):
+            raw = raw[4:]
+    raw = raw.strip()
+
+    result = json.loads(raw)
+    result["model"] = model_config["name"]
+    result["inference_seconds"] = elapsed
+    result["error"] = None
+    result["timestamp"] = datetime.now(timezone.utc).isoformat()
+    return result
+
+
+# -- Triage ------------------------------------------------------------------
+def run_triage(passes: list[dict]) -> tuple[str, str | None]:
+    """Determine if results should be auto-accepted or need human review."""
+    successful = [p for p in passes if not p.get("error")]
+    if not successful:
+        return "needs_review", None
+
+    numbers = [p.get("license_number") for p in successful if p.get("license_number")]
+    confidences = [p.get("confidence", 0) for p in successful]
+
+    if not numbers:
+        return "needs_review", None
+
+    all_agree = len(set(numbers)) == 1
+    avg_confidence = sum(confidences) / len(confidences) if confidences else 0
+
+    if all_agree and avg_confidence >= AUTO_ACCEPT_THRESHOLD:
+        return "auto_accepted", numbers[0]
+    else:
+        return "needs_review", None
+
+
+# -- Processing --------------------------------------------------------------
+def process_file(path_str: str) -> dict:
+    """Run a file through all pipeline models and triage the results."""
+    path = Path(path_str)
+    if not path.exists():
+        raise FileNotFoundError(f"File not found: {path_str}")
+
+    pipeline = get_pipeline()
+    passes = []
+
+    for model_config in pipeline:
+        label = model_config.get("label", model_config["name"])
+        print(f"[{WORKER_ID}]   Running {label}...", flush=True)
+
+        try:
+            result = call_model(path, model_config)
+            passes.append(result)
+            print(
+                f"[{WORKER_ID}]   {label}: "
+                f"{result.get('license_number')} "
+                f"(confidence: {result.get('confidence')}, "
+                f"{result.get('inference_seconds')}s)",
+                flush=True,
+            )
+        except Exception as e:
+            passes.append({
+                "model": model_config["name"],
+                "license_number": None,
+                "field_label": None,
+                "confidence": 0.0,
+                "inference_seconds": None,
+                "error": str(e),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            })
+            print(f"[{WORKER_ID}]   {label}: FAILED - {e}", flush=True)
+
+    status, final_value = run_triage(passes)
+
+    return {
+        "original_filename": path.name,
+        "path": path_str,
+        "passes": passes,
+        "status": status,
+        "final_value": final_value,
+        "reviewed_by": None,
+        "reviewed_at": None,
+    }
+
+
+# -- Main loop ---------------------------------------------------------------
+print(f"[{WORKER_ID}] Worker started. Listening on queue: {QUEUE_NAME}", flush=True)
+print(f"[{WORKER_ID}] Pipeline: {[m.get('label', m['name']) for m in get_pipeline()]}", flush=True)
+
+while True:
+    item = r.brpop(QUEUE_NAME, timeout=30)
+
+    if item is None:
+        depth = r.llen(QUEUE_NAME)
+        if depth == 0:
+            print(f"[{WORKER_ID}] Queue empty. Waiting...", flush=True)
+        continue
+
+    _, path_str = item
+    filename = Path(path_str).name
+    print(f"[{WORKER_ID}] Processing {filename}...", flush=True)
+
+    try:
+        record = process_file(path_str)
+
+        # Save to Redis
+        r.hset("files", path_str, json.dumps(record))
+
+        # Save individual JSON file
+        out_file = OUTPUT_DIR / f"{Path(path_str).stem}_result.json"
+        out_file.write_text(json.dumps(record, indent=2))
+
+        print(
+            f"[{WORKER_ID}] -> {filename} -> {record['status']} "
+            f"(final: {record['final_value']}, {len(record['passes'])} passes)",
+            flush=True,
+        )
+
+    except Exception as e:
+        failure_count = r.hincrby("failures", path_str, 1)
+
+        if failure_count < MAX_RETRIES:
+            r.lpush(QUEUE_NAME, path_str)
+            print(
+                f"[{WORKER_ID}] x {filename} failed "
+                f"(attempt {failure_count}/{MAX_RETRIES}): {e} -- requeued",
+                flush=True,
+            )
+        else:
+            error_record = {
+                "original_filename": filename,
+                "path": path_str,
+                "passes": [],
+                "status": "error",
+                "final_value": None,
+                "reviewed_by": None,
+                "reviewed_at": None,
+                "error": str(e),
+            }
+            r.hset("files", path_str, json.dumps(error_record))
+
+            out_file = OUTPUT_DIR / f"{Path(path_str).stem}_result.json"
+            out_file.write_text(json.dumps(error_record, indent=2))
+
+            print(
+                f"[{WORKER_ID}] x {filename} permanently failed "
+                f"after {MAX_RETRIES} attempts: {e}",
+                flush=True,
+            )

@@ -1,0 +1,234 @@
+# ============================================================
+# OCR Benchmark Stack
+#
+# Usage:
+#   Start dashboard:    docker compose up -d web
+#   Start Ollama:       docker compose --profile qwen up -d
+#   Start worker:       docker compose --profile worker up -d
+#   Enqueue files:      docker compose --profile workers run enqueuer
+#   Full Qwen stack:    docker compose --profile qwen --profile worker up -d
+#
+# GPU index reference:
+#   0: RTX 3080 10GB  (GPU-884b504f-a5ab-e9d7-b85b-799874db3fd8)
+#   1: RTX 3060 Ti 8GB (GPU-8487b266-25c9-3369-8894-d94a07344f17)
+#   2: RTX 3060 Ti 8GB (GPU-d9f2c052-9dcb-15db-2e3a-889b7a8bd5fb)
+#   3: RTX 3060 Ti 8GB (GPU-50b74d27-cfe4-571c-65b0-9ff9b344cb18)
+# ============================================================
+
+services:
+
+  # ----------------------------------------------------------
+  # REDIS -- shared queue and results store
+  # ----------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    container_name: vdl-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    command: redis-server --appendonly yes
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # ----------------------------------------------------------
+  # OLLAMA -- serves Qwen VL models (and any other Ollama models)
+  # Runs on GPU 0 -- RTX 3080 10GB
+  # Profile: qwen
+  # ----------------------------------------------------------
+  ollama-qwen:
+    image: ollama/ollama:latest
+    container_name: vdl-ollama-qwen
+    profiles: ["qwen"]
+    runtime: nvidia
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=GPU-884b504f-a5ab-e9d7-b85b-799874db3fd8
+      - OLLAMA_HOST=0.0.0.0
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-data:/root/.ollama
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  # ----------------------------------------------------------
+  # OLLAMA MODEL PULL -- one-shot init to pull models
+  # Runs once, then exits. Safe to re-run.
+  # ----------------------------------------------------------
+  ollama-qwen-pull:
+    image: ollama/ollama:latest
+    container_name: vdl-ollama-qwen-pull
+    profiles: ["qwen"]
+    depends_on:
+      ollama-qwen:
+        condition: service_healthy
+    entrypoint: ["sh", "-c", "ollama pull qwen2.5vl:7b && ollama pull qwen2.5vl:3b"]
+    environment:
+      - OLLAMA_HOST=ollama-qwen:11434
+    restart: "no"
+
+  # ----------------------------------------------------------
+  # CHANDRA 9B (datalab-to/chandra) via vLLM
+  # Runs on GPU 1 -- RTX 3060 Ti 8GB
+  # Needs 4-bit quant -- bitsandbytes
+  # Profile: chandra
+  # ----------------------------------------------------------
+  chandra:
+    image: vllm/vllm-openai:latest
+    container_name: vdl-chandra
+    profiles: ["chandra"]
+    runtime: nvidia
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=GPU-8487b266-25c9-3369-8894-d94a07344f17
+      - CUDA_VISIBLE_DEVICES=0
+    ports:
+      - "8001:8001"
+    volumes:
+      - hf-cache:/root/.cache/huggingface
+    command: >
+      --model datalab-to/chandra
+      --dtype bfloat16
+      --quantization bitsandbytes
+      --load-format bitsandbytes
+      --max-model-len 4096
+      --max-num-seqs 2
+      --gpu-memory-utilization 0.92
+      --served-model-name chandra
+      --host 0.0.0.0
+      --port 8001
+    shm_size: "2gb"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 180s
+
+  # ----------------------------------------------------------
+  # ENQUEUER -- scans /input, pushes files into Redis queue
+  # Run once then exits
+  # ----------------------------------------------------------
+  enqueuer:
+    build:
+      context: ./workers
+      dockerfile: Dockerfile
+    container_name: vdl-enqueuer
+    profiles: ["workers"]
+    command: python enqueue.py
+    environment:
+      - REDIS_HOST=redis
+      - INPUT_DIR=/input
+    volumes:
+      - ./input:/input:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: "no"
+
+  # ----------------------------------------------------------
+  # WORKER -- unified pipeline worker
+  # Pulls from queue, runs each file through all pipeline models,
+  # performs triage, stores results
+  # ----------------------------------------------------------
+  worker:
+    build:
+      context: ./workers
+      dockerfile: Dockerfile
+    container_name: vdl-worker
+    profiles: ["worker"]
+    command: python worker.py
+    environment:
+      - REDIS_HOST=redis
+      - QUEUE_NAME=queue:pending
+      - WORKER_ID=pipeline
+      - OUTPUT_DIR=/output
+      - AUTO_ACCEPT_THRESHOLD=0.85
+    volumes:
+      - ./input:/input:ro
+      - ./output:/output
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ----------------------------------------------------------
+  # BENCHMARK RUNNER -- runs N docs through both models
+  # ----------------------------------------------------------
+  benchmark:
+    build:
+      context: ./workers
+      dockerfile: Dockerfile
+    container_name: vdl-benchmark
+    profiles: ["benchmark"]
+    command: python benchmark.py
+    environment:
+      - REDIS_HOST=redis
+      - QWEN_URL=http://ollama-qwen:11434/v1
+      - CHANDRA_URL=http://chandra:8001/v1
+      - INPUT_DIR=/input
+      - OUTPUT_DIR=/output
+      - SAMPLE_SIZE=10
+    volumes:
+      - ./input:/input:ro
+      - ./output:/output
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: "no"
+
+  # ----------------------------------------------------------
+  # EXPORTER -- dumps Redis results to CSV
+  # ----------------------------------------------------------
+  exporter:
+    build:
+      context: ./workers
+      dockerfile: Dockerfile
+    container_name: vdl-exporter
+    profiles: ["export"]
+    command: python export.py
+    environment:
+      - REDIS_HOST=redis
+      - OUTPUT_DIR=/output
+    volumes:
+      - ./output:/output
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: "no"
+
+  # ----------------------------------------------------------
+  # WEB DASHBOARD -- live view of queue, results, timing, review
+  # Always on (no profile needed), accessible at :5000
+  # ----------------------------------------------------------
+  web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+    container_name: vdl-web
+    ports:
+      - "5000:5000"
+    environment:
+      - REDIS_HOST=redis
+      - INPUT_DIR=/input
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./input:/input:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  redis-data:
+  hf-cache:        # HuggingFace model cache (vLLM)
+  ollama-data:     # Ollama model cache

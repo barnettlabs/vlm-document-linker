@@ -83,6 +83,15 @@ def api_status():
     reviewed = [f for f in files if f.get("status") == "reviewed"]
     errored = [f for f in files if f.get("status") == "error"]
 
+    # Get in-progress files
+    processing_raw = r.hgetall("processing")
+    processing = []
+    for path_key, val in processing_raw.items():
+        try:
+            processing.append(json.loads(val))
+        except Exception:
+            pass
+
     # Compute per-model stats from passes
     model_stats = {}
     for rec in files:
@@ -95,9 +104,15 @@ def api_status():
                     "failed": 0,
                     "times": [],
                     "confidences": [],
+                    "total_prompt_tokens": 0,
+                    "total_completion_tokens": 0,
+                    "total_tokens": 0,
                 }
             stats = model_stats[model]
             stats["total"] += 1
+            stats["total_prompt_tokens"] += p.get("prompt_tokens", 0) or 0
+            stats["total_completion_tokens"] += p.get("completion_tokens", 0) or 0
+            stats["total_tokens"] += p.get("total_tokens", 0) or 0
             if p.get("error"):
                 stats["failed"] += 1
             else:
@@ -116,6 +131,8 @@ def api_status():
     return jsonify({
         "queue_pending": queue_pending,
         "queue_items": queue_items,
+        "processing": processing,
+        "processing_count": len(processing),
         "total_files": len(files),
         "auto_accepted": len(auto_accepted),
         "needs_review": len(needs_review),

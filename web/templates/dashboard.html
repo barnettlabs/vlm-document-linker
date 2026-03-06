@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>OCR Bench Dashboard</title>
+<title>VLM Document Linker</title>
 <style>
   :root {
     --bg: #0f1117;
@@ -412,7 +412,7 @@
 <body>
 
 <div class="header">
-  <h1>OCR Bench Dashboard</h1>
+  <h1>VLM Document Linker</h1>
   <div class="header-actions">
     <a href="/review">Review Queue</a>
     <span class="refresh-info" id="lastUpdate">--</span>
@@ -448,6 +448,14 @@
         <button class="btn btn-danger btn-sm" onclick="clearQueue()">Clear Queue</button>
       </div>
       <div class="panel-body" id="queueBody"></div>
+    </div>
+
+    <!-- Processing -->
+    <div class="panel" id="processingPanel" style="display:none;">
+      <div class="panel-header">
+        <h2>Currently Processing (<span id="processingCount">0</span>)</h2>
+      </div>
+      <div class="panel-body" id="processingBody"></div>
     </div>
 
     <!-- Files table -->
@@ -532,6 +540,7 @@ async function refresh() {
 function render() {
   renderStats();
   renderModelStats();
+  renderProcessing();
   renderQueue();
   renderFiles();
   renderContainers();
@@ -541,7 +550,8 @@ function render() {
 
 function renderStats() {
   const cards = [
-    { label: 'Queue Pending', value: data.queue_pending, cls: data.queue_pending > 0 ? 'yellow' : 'green', sub: data.queue_pending > 0 ? 'Processing...' : 'Idle' },
+    { label: 'Queue Pending', value: data.queue_pending, cls: data.queue_pending > 0 ? 'yellow' : 'green', sub: data.queue_pending > 0 ? 'Waiting' : 'Idle' },
+    { label: 'Processing', value: data.processing_count || 0, cls: (data.processing_count || 0) > 0 ? 'cyan' : 'green', sub: (data.processing_count || 0) > 0 ? 'In flight' : 'Idle' },
     { label: 'Total Files', value: data.total_files, cls: 'blue', sub: 'Processed' },
     { label: 'Auto Accepted', value: data.auto_accepted, cls: 'green', sub: 'High confidence consensus' },
     { label: 'Needs Review', value: data.needs_review, cls: data.needs_review > 0 ? 'yellow' : 'green', sub: data.needs_review > 0 ? 'Click Review Queue' : 'All clear' },
@@ -567,7 +577,10 @@ function renderModelStats() {
     return;
   }
 
-  grid.innerHTML = Object.entries(stats).map(([model, s]) => `
+  grid.innerHTML = Object.entries(stats).map(([model, s]) => {
+    const avgPrompt = s.succeeded > 0 ? Math.round(s.total_prompt_tokens / s.succeeded) : 0;
+    const avgCompletion = s.succeeded > 0 ? Math.round(s.total_completion_tokens / s.succeeded) : 0;
+    return `
     <div class="model-stat-card">
       <h3>${model}</h3>
       <div class="model-stat-row"><span>Total passes</span><span class="val">${s.total}</span></div>
@@ -575,8 +588,32 @@ function renderModelStats() {
       <div class="model-stat-row"><span>Failed</span><span class="val" style="color:var(--red)">${s.failed}</span></div>
       <div class="model-stat-row"><span>Avg time</span><span class="val">${s.avg_time}s</span></div>
       <div class="model-stat-row"><span>Avg confidence</span><span class="val">${s.avg_confidence}</span></div>
-    </div>
-  `).join('');
+      <div class="model-stat-row" style="margin-top:6px;border-top:1px solid var(--border);padding-top:6px;"><span>Total tokens</span><span class="val">${s.total_tokens.toLocaleString()}</span></div>
+      <div class="model-stat-row"><span>Avg prompt tokens</span><span class="val">${avgPrompt.toLocaleString()}</span></div>
+      <div class="model-stat-row"><span>Avg completion tokens</span><span class="val">${avgCompletion.toLocaleString()}</span></div>
+    </div>`;
+  }).join('');
+}
+
+function renderProcessing() {
+  const panel = document.getElementById('processingPanel');
+  const body = document.getElementById('processingBody');
+  const items = data.processing || [];
+  document.getElementById('processingCount').textContent = items.length;
+
+  if (items.length === 0) {
+    panel.style.display = 'none';
+    return;
+  }
+
+  panel.style.display = '';
+  body.innerHTML = items.map(p => {
+    const elapsed = p.started_at ? Math.round((Date.now() - new Date(p.started_at).getTime()) / 1000) : 0;
+    return `<div class="queue-item">
+      <span class="mono">${p.filename}</span>
+      <span style="color:var(--text-dim);font-size:12px;">worker: ${p.worker} &middot; ${elapsed}s elapsed</span>
+    </div>`;
+  }).join('');
 }
 
 function renderQueue() {
@@ -758,6 +795,9 @@ async function openFileModal(path) {
         <div class="pass-row"><span>Field</span><span class="val">${p.field_label || '-'}</span></div>
         <div class="pass-row"><span>Confidence</span><span class="val">${p.confidence != null ? p.confidence : '-'}</span></div>
         <div class="pass-row"><span>Time</span><span class="val">${p.inference_seconds != null ? p.inference_seconds + 's' : '-'}</span></div>
+        <div class="pass-row"><span>Prompt tokens</span><span class="val">${p.prompt_tokens ? p.prompt_tokens.toLocaleString() : '-'}</span></div>
+        <div class="pass-row"><span>Completion tokens</span><span class="val">${p.completion_tokens ? p.completion_tokens.toLocaleString() : '-'}</span></div>
+        <div class="pass-row"><span>Total tokens</span><span class="val">${p.total_tokens ? p.total_tokens.toLocaleString() : '-'}</span></div>
         ${p.error ? `<div class="pass-row"><span>Error</span><span class="val" style="color:var(--red)">${p.error}</span></div>` : ''}
       </div>`;
     });

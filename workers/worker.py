@@ -15,6 +15,7 @@ Configured via environment variables:
 import os
 import json
 import base64
+import re
 import time
 from datetime import datetime, timezone
 import redis
@@ -32,7 +33,8 @@ OUTPUT_DIR = Path(os.environ.get("OUTPUT_DIR", "/output"))
 MAX_RETRIES = 3
 AUTO_ACCEPT_THRESHOLD = float(os.environ.get("AUTO_ACCEPT_THRESHOLD", "0.85"))
 
-PROMPT = """You are extracting structured data from a government or legal document.
+PROMPT = """/nothink
+You are extracting structured data from a government or legal document.
 
 Extract the primary license, certificate, or tracking number from this document.
 Look for fields labeled: Certificate No, License No, Tracking No, Permit No,
@@ -99,7 +101,7 @@ def call_model(path: Path, model_config: dict) -> dict:
     t0 = time.time()
     response = client.chat.completions.create(
         model=model_config["name"],
-        max_tokens=256,
+        max_tokens=2048,
         temperature=0.0,
         messages=[
             {
@@ -118,7 +120,17 @@ def call_model(path: Path, model_config: dict) -> dict:
     )
     elapsed = round(time.time() - t0, 2)
 
-    raw = response.choices[0].message.content.strip()
+    raw = response.choices[0].message.content or ""
+    raw = raw.strip()
+    print(f"[{WORKER_ID}]   Raw response: {raw[:500]}", flush=True)
+
+    # Capture token usage
+    usage = getattr(response, "usage", None)
+    prompt_tokens = getattr(usage, "prompt_tokens", 0) or 0
+    completion_tokens = getattr(usage, "completion_tokens", 0) or 0
+
+    # Strip <think>...</think> reasoning blocks (Qwen 3.5 thinking mode)
+    raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
 
     # Strip accidental markdown fences
     if raw.startswith("```"):
@@ -130,6 +142,9 @@ def call_model(path: Path, model_config: dict) -> dict:
     result = json.loads(raw)
     result["model"] = model_config["name"]
     result["inference_seconds"] = elapsed
+    result["prompt_tokens"] = prompt_tokens
+    result["completion_tokens"] = completion_tokens
+    result["total_tokens"] = prompt_tokens + completion_tokens
     result["error"] = None
     result["timestamp"] = datetime.now(timezone.utc).isoformat()
     return result
@@ -223,10 +238,18 @@ while True:
     filename = Path(path_str).name
     print(f"[{WORKER_ID}] Processing {filename}...", flush=True)
 
+    # Track in-progress
+    r.hset("processing", path_str, json.dumps({
+        "worker": WORKER_ID,
+        "filename": filename,
+        "started_at": datetime.now(timezone.utc).isoformat(),
+    }))
+
     try:
         record = process_file(path_str)
 
         # Save to Redis
+        r.hdel("processing", path_str)
         r.hset("files", path_str, json.dumps(record))
 
         # Save individual JSON file
@@ -240,6 +263,7 @@ while True:
         )
 
     except Exception as e:
+        r.hdel("processing", path_str)
         failure_count = r.hincrby("failures", path_str, 1)
 
         if failure_count < MAX_RETRIES:

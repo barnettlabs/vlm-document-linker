@@ -1,12 +1,12 @@
 # ============================================================
-# OCR Benchmark Stack
+# VLM Document Linker Stack
 #
 # Usage:
 #   Start dashboard:    docker compose up -d web
-#   Start Ollama:       docker compose --profile qwen up -d
+#   Start models:       docker compose --profile models up -d
 #   Start worker:       docker compose --profile worker up -d
 #   Enqueue files:      docker compose --profile workers run enqueuer
-#   Full Qwen stack:    docker compose --profile qwen --profile worker up -d
+#   Full stack:         docker compose --profile models --profile worker up -d
 #
 # GPU index reference:
 #   0: RTX 3080 10GB  (GPU-884b504f-a5ab-e9d7-b85b-799874db3fd8)
@@ -36,14 +36,14 @@ services:
       retries: 5
 
   # ----------------------------------------------------------
-  # OLLAMA -- serves Qwen VL models (and any other Ollama models)
-  # Runs on GPU 0 -- RTX 3080 10GB
-  # Profile: qwen
+  # OLLAMA-GPU0 -- RTX 3080 10GB
+  # Serves: qwen3.5:9b (6.6GB)
+  # Profile: models
   # ----------------------------------------------------------
-  ollama-qwen:
+  ollama-gpu0:
     image: ollama/ollama:latest
-    container_name: vdl-ollama-qwen
-    profiles: ["qwen"]
+    container_name: vdl-ollama-gpu0
+    profiles: ["models"]
     runtime: nvidia
     environment:
       - NVIDIA_VISIBLE_DEVICES=GPU-884b504f-a5ab-e9d7-b85b-799874db3fd8
@@ -51,7 +51,7 @@ services:
     ports:
       - "11434:11434"
     volumes:
-      - ollama-data:/root/.ollama
+      - ollama-data-gpu0:/root/.ollama
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "ollama", "list"]
@@ -61,58 +61,57 @@ services:
       start_period: 30s
 
   # ----------------------------------------------------------
-  # OLLAMA MODEL PULL -- one-shot init to pull models
-  # Runs once, then exits. Safe to re-run.
+  # OLLAMA-GPU1 -- RTX 3060 Ti 8GB
+  # Serves: glm-ocr (2.2GB)
+  # Profile: models
   # ----------------------------------------------------------
-  ollama-qwen-pull:
+  ollama-gpu1:
     image: ollama/ollama:latest
-    container_name: vdl-ollama-qwen-pull
-    profiles: ["qwen"]
-    depends_on:
-      ollama-qwen:
-        condition: service_healthy
-    entrypoint: ["sh", "-c", "ollama pull qwen2.5vl:7b && ollama pull qwen2.5vl:3b"]
-    environment:
-      - OLLAMA_HOST=ollama-qwen:11434
-    restart: "no"
-
-  # ----------------------------------------------------------
-  # CHANDRA 9B (datalab-to/chandra) via vLLM
-  # Runs on GPU 1 -- RTX 3060 Ti 8GB
-  # Needs 4-bit quant -- bitsandbytes
-  # Profile: chandra
-  # ----------------------------------------------------------
-  chandra:
-    image: vllm/vllm-openai:latest
-    container_name: vdl-chandra
-    profiles: ["chandra"]
+    container_name: vdl-ollama-gpu1
+    profiles: ["models"]
     runtime: nvidia
     environment:
       - NVIDIA_VISIBLE_DEVICES=GPU-8487b266-25c9-3369-8894-d94a07344f17
-      - CUDA_VISIBLE_DEVICES=0
+      - OLLAMA_HOST=0.0.0.0
     ports:
-      - "8001:8001"
+      - "11435:11434"
     volumes:
-      - hf-cache:/root/.cache/huggingface
-    command: >
-      --model datalab-to/chandra
-      --dtype bfloat16
-      --quantization bitsandbytes
-      --load-format bitsandbytes
-      --max-model-len 4096
-      --max-num-seqs 2
-      --gpu-memory-utilization 0.92
-      --served-model-name chandra
-      --host 0.0.0.0
-      --port 8001
-    shm_size: "2gb"
+      - ollama-data-gpu1:/root/.ollama
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
-      interval: 15s
-      timeout: 10s
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
       retries: 10
-      start_period: 180s
+      start_period: 30s
+
+  # ----------------------------------------------------------
+  # MODEL PULLS -- one-shot init to pull models on each GPU
+  # Runs once, then exits. Safe to re-run.
+  # ----------------------------------------------------------
+  ollama-pull-gpu0:
+    image: ollama/ollama:latest
+    container_name: vdl-ollama-pull-gpu0
+    profiles: ["models"]
+    depends_on:
+      ollama-gpu0:
+        condition: service_healthy
+    entrypoint: ["sh", "-c", "ollama pull qwen3.5:9b"]
+    environment:
+      - OLLAMA_HOST=ollama-gpu0:11434
+    restart: "no"
+
+  ollama-pull-gpu1:
+    image: ollama/ollama:latest
+    container_name: vdl-ollama-pull-gpu1
+    profiles: ["models"]
+    depends_on:
+      ollama-gpu1:
+        condition: service_healthy
+    entrypoint: ["sh", "-c", "ollama pull glm-ocr"]
+    environment:
+      - OLLAMA_HOST=ollama-gpu1:11434
+    restart: "no"
 
   # ----------------------------------------------------------
   # ENQUEUER -- scans /input, pushes files into Redis queue
@@ -162,31 +161,6 @@ services:
     restart: unless-stopped
 
   # ----------------------------------------------------------
-  # BENCHMARK RUNNER -- runs N docs through both models
-  # ----------------------------------------------------------
-  benchmark:
-    build:
-      context: ./workers
-      dockerfile: Dockerfile
-    container_name: vdl-benchmark
-    profiles: ["benchmark"]
-    command: python benchmark.py
-    environment:
-      - REDIS_HOST=redis
-      - QWEN_URL=http://ollama-qwen:11434/v1
-      - CHANDRA_URL=http://chandra:8001/v1
-      - INPUT_DIR=/input
-      - OUTPUT_DIR=/output
-      - SAMPLE_SIZE=10
-    volumes:
-      - ./input:/input:ro
-      - ./output:/output
-    depends_on:
-      redis:
-        condition: service_healthy
-    restart: "no"
-
-  # ----------------------------------------------------------
   # EXPORTER -- dumps Redis results to CSV
   # ----------------------------------------------------------
   exporter:
@@ -220,6 +194,7 @@ services:
     environment:
       - REDIS_HOST=redis
       - INPUT_DIR=/input
+      - OLLAMA_ENDPOINTS=http://ollama-gpu0:11434,http://ollama-gpu1:11434
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ./input:/input:ro
@@ -230,5 +205,5 @@ services:
 
 volumes:
   redis-data:
-  hf-cache:        # HuggingFace model cache (vLLM)
-  ollama-data:     # Ollama model cache
+  ollama-data-gpu0:  # Ollama model cache (RTX 3080)
+  ollama-data-gpu1:  # Ollama model cache (RTX 3060 Ti)

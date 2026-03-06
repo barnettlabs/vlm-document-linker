@@ -46,7 +46,8 @@ Return ONLY valid JSON, no markdown, no explanation:
 }"""
 
 DEFAULT_PIPELINE = [
-    {"name": "qwen2.5vl:7b", "base_url": "http://ollama-qwen:11434/v1", "label": "Qwen 2.5 VL 7B"},
+    {"name": "qwen3.5:9b", "base_url": "http://ollama-gpu0:11434/v1", "label": "Qwen 3.5 9B"},
+    {"name": "glm-ocr", "base_url": "http://ollama-gpu1:11434/v1", "label": "GLM-OCR 0.9B"},
 ]
 
 # -- Redis -------------------------------------------------------------------

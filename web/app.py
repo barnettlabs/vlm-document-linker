@@ -17,17 +17,21 @@ app = Flask(__name__)
 
 REDIS_HOST = os.environ.get("REDIS_HOST", "localhost")
 INPUT_DIR = os.environ.get("INPUT_DIR", "/input")
+OLLAMA_ENDPOINTS = [
+    url.strip() for url in
+    os.environ.get("OLLAMA_ENDPOINTS", "").split(",") if url.strip()
+]
 
 r = redis.Redis(host=REDIS_HOST, port=6379, decode_responses=True)
 docker_client = docker.DockerClient(base_url="unix:///var/run/docker.sock")
 
 MANAGED_CONTAINERS = [
-    "vdl-ollama-qwen",
-    "vdl-ollama-qwen-pull",
+    "vdl-ollama-gpu0",
+    "vdl-ollama-gpu1",
+    "vdl-ollama-pull-gpu0",
+    "vdl-ollama-pull-gpu1",
     "vdl-worker",
     "vdl-enqueuer",
-    "vdl-chandra",
-    "vdl-benchmark",
     "vdl-exporter",
 ]
 
@@ -140,22 +144,34 @@ def set_pipeline():
 
 @app.route("/api/pipeline/models")
 def get_available_models():
-    """Query Ollama for available models."""
-    models = []
+    """Query all Ollama instances from pipeline config for available models."""
     import urllib.request
-    try:
-        req = urllib.request.Request("http://ollama-qwen:11434/api/tags")
-        with urllib.request.urlopen(req, timeout=5) as resp:
-            data = json.loads(resp.read().decode())
-            for model in data.get("models", []):
-                models.append({
-                    "name": model["name"],
-                    "base_url": "http://ollama-qwen:11434/v1",
-                    "label": model["name"],
-                    "size": model.get("size", 0),
-                })
-    except Exception:
-        pass
+
+    # Use configured endpoints, plus any additional ones from pipeline config
+    seen_urls = set(OLLAMA_ENDPOINTS)
+    raw = r.get("config:pipeline")
+    pipeline = json.loads(raw) if raw else []
+    for entry in pipeline:
+        base_url = entry.get("base_url", "")
+        ollama_root = base_url.replace("/v1", "")
+        if ollama_root:
+            seen_urls.add(ollama_root)
+
+    models = []
+    for ollama_root in seen_urls:
+        try:
+            req = urllib.request.Request(f"{ollama_root}/api/tags")
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                data = json.loads(resp.read().decode())
+                for model in data.get("models", []):
+                    models.append({
+                        "name": model["name"],
+                        "base_url": f"{ollama_root}/v1",
+                        "label": model["name"],
+                        "size": model.get("size", 0),
+                    })
+        except Exception:
+            pass
 
     return jsonify({"models": models})
 

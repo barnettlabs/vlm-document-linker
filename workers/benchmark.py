@@ -24,7 +24,7 @@ import io
 from tabulate import tabulate
 
 # ── Config ────────────────────────────────────────────────────────────────────
-QWEN_URL    = os.environ.get("QWEN_URL", "http://ollama-qwen:8000/v1")
+QWEN_URL    = os.environ.get("QWEN_URL", "http://ollama-gpu1:11434/v1")
 CHANDRA_URL = os.environ.get("CHANDRA_URL", "http://chandra:8001/v1")
 INPUT_DIR   = Path(os.environ.get("INPUT_DIR", "/input"))
 OUTPUT_DIR  = Path(os.environ.get("OUTPUT_DIR", "/output"))

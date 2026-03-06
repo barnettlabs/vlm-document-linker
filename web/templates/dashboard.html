@@ -218,32 +218,151 @@
   .container-actions { display: flex; gap: 6px; }
 
   /* Pipeline config */
-  .pipeline-item {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 8px 0;
-    border-bottom: 1px solid var(--border);
-    font-size: 13px;
+  .pipeline-section-label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--text-dim);
+    margin-bottom: 10px;
+    font-weight: 500;
   }
 
-  .pipeline-item:last-child { border-bottom: none; }
-
-  .pipeline-add {
-    display: flex;
-    gap: 8px;
-    padding: 12px 0;
-    align-items: center;
-  }
-
-  .pipeline-add input {
+  .pipeline-card {
     background: var(--surface2);
     border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px 14px;
+    margin-bottom: 8px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    transition: border-color 0.15s;
+  }
+
+  .pipeline-card:hover { border-color: var(--blue); }
+
+  .pipeline-card .pipeline-order {
+    width: 24px;
+    height: 24px;
     border-radius: 6px;
-    color: var(--text);
-    padding: 6px 10px;
+    background: rgba(96,165,250,0.15);
+    color: var(--blue);
     font-size: 12px;
-    flex: 1;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+
+  .pipeline-card .pipeline-info { flex: 1; min-width: 0; }
+
+  .pipeline-card .pipeline-name {
+    font-weight: 600;
+    font-size: 13px;
+    margin-bottom: 2px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .pipeline-card .pipeline-url {
+    font-size: 11px;
+    color: var(--text-dim);
+    font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .pipeline-card .pipeline-actions { display: flex; gap: 4px; flex-shrink: 0; }
+
+  .pipeline-card .pipeline-actions .btn {
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 14px;
+    border-radius: 6px;
+  }
+
+  .pipeline-empty {
+    text-align: center;
+    padding: 24px;
+    color: var(--text-dim);
+    font-size: 13px;
+    border: 2px dashed var(--border);
+    border-radius: 8px;
+    margin-bottom: 12px;
+  }
+
+  .available-models-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 8px;
+  }
+
+  .available-model-card {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 12px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    cursor: pointer;
+    transition: border-color 0.15s, background 0.15s;
+  }
+
+  .available-model-card:hover {
+    border-color: var(--green);
+    background: rgba(52,211,153,0.05);
+  }
+
+  .available-model-card .model-name {
+    font-size: 12px;
+    font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .available-model-card .model-size {
+    font-size: 11px;
+    color: var(--text-dim);
+    flex-shrink: 0;
+  }
+
+  .pipeline-divider {
+    border-top: 1px solid var(--border);
+    margin: 16px 0;
+    padding-top: 16px;
+  }
+
+  .model-family {
+    margin-bottom: 12px;
+  }
+
+  .model-family-name {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--purple);
+    margin-bottom: 6px;
+    padding-left: 2px;
+  }
+
+  .model-family-variants {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .available-model-card .model-tag {
+    font-size: 12px;
+    font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
   }
 
   /* Model stats grid */
@@ -473,6 +592,9 @@
             <th>Status</th>
             <th>Final Value</th>
             <th>Passes</th>
+            <th>Time</th>
+            <th>Confidence</th>
+            <th>Tokens</th>
             <th>Actions</th>
           </tr></thead>
           <tbody id="filesBody"></tbody>
@@ -648,7 +770,7 @@ function renderFiles() {
   const body = document.getElementById('filesBody');
 
   if (!data.files || data.files.length === 0) {
-    body.innerHTML = '<tr><td colspan="5" class="empty-msg">No files processed yet</td></tr>';
+    body.innerHTML = '<tr><td colspan="8" class="empty-msg">No files processed yet</td></tr>';
     return;
   }
 
@@ -663,6 +785,23 @@ function renderFiles() {
       <td>${statusBadge(f.status)}</td>
       <td class="mono">${f.final_value || '-'}</td>
       <td>${passSummary}</td>
+      <td class="mono" style="font-size:12px">${(() => {
+        const passes = f.passes || [];
+        const total = passes.reduce((sum, p) => sum + (p.inference_seconds || 0), 0);
+        return total > 0 ? total.toFixed(1) + 's' : '-';
+      })()}</td>
+      <td class="mono" style="font-size:12px">${(() => {
+        const passes = f.passes || [];
+        const confs = passes.filter(p => !p.error && p.confidence != null).map(p => p.confidence);
+        if (confs.length === 0) return '-';
+        const avg = confs.reduce((a, b) => a + b, 0) / confs.length;
+        return avg.toFixed(2);
+      })()}</td>
+      <td class="mono" style="font-size:12px">${(() => {
+        const passes = f.passes || [];
+        const total = passes.reduce((sum, p) => sum + (p.completion_tokens || 0), 0);
+        return total > 0 ? total.toLocaleString() : '-';
+      })()}</td>
       <td>
         <button class="btn btn-sm" onclick="requeueFile('${path}')">Re-run</button>
       </td>
@@ -689,43 +828,75 @@ function renderPipeline() {
   const body = document.getElementById('pipelineBody');
   let html = '';
 
-  // Current pipeline
+  // Active pipeline
+  html += '<div class="pipeline-section-label">Active Pipeline</div>';
+
   if (pipelineConfig.length > 0) {
     html += pipelineConfig.map((m, i) => `
-      <div class="pipeline-item">
-        <span class="mono">${m.label || m.name}</span>
-        <span style="color:var(--text-dim);font-size:11px;">${m.base_url}</span>
-        <button class="btn btn-danger btn-sm" onclick="removePipelineModel(${i})">Remove</button>
+      <div class="pipeline-card">
+        <div class="pipeline-order">${i + 1}</div>
+        <div class="pipeline-info">
+          <div class="pipeline-name">${m.label || m.name}</div>
+          <div class="pipeline-url">${m.base_url}</div>
+        </div>
+        <div class="pipeline-actions">
+          <button class="btn" onclick="movePipelineModel(${i}, -1)" ${i === 0 ? 'disabled' : ''} title="Move up">&#x25B2;</button>
+          <button class="btn" onclick="movePipelineModel(${i}, 1)" ${i === pipelineConfig.length - 1 ? 'disabled' : ''} title="Move down">&#x25BC;</button>
+          <button class="btn btn-danger" onclick="removePipelineModel(${i})" title="Remove">&#x2715;</button>
+        </div>
       </div>
     `).join('');
   } else {
-    html += '<div class="empty-msg">No models in pipeline</div>';
+    html += '<div class="pipeline-empty">No models in pipeline — add one below</div>';
   }
 
-  // Available models to add
-  html += '<div style="margin-top:12px;border-top:1px solid var(--border);padding-top:12px;">';
-  html += '<div style="font-size:12px;color:var(--text-dim);margin-bottom:8px;">Add from Ollama:</div>';
+  // Available models
+  html += '<div class="pipeline-divider"></div>';
+  html += '<div class="pipeline-section-label">Available Models</div>';
 
   if (availableModels.length > 0) {
-    html += availableModels.map(m => {
-      return `<div class="pipeline-item">
-        <span class="mono">${m.name}</span>
-        <button class="btn btn-primary btn-sm" onclick="addPipelineModel('${m.name}', '${m.base_url}', '${m.label || m.name}')">Add</button>
-      </div>`;
-    }).join('');
+    // Filter out models already in pipeline
+    const pipelineNames = new Set(pipelineConfig.map(m => m.name));
+    const available = availableModels.filter(m => !pipelineNames.has(m.name));
+
+    if (available.length > 0) {
+      // Group by model family (e.g. "qwen3-vl:2b" -> "qwen3-vl")
+      const families = {};
+      available.forEach(m => {
+        const family = m.name.split(':')[0];
+        if (!families[family]) families[family] = [];
+        families[family].push(m);
+      });
+
+      // Sort models within each family by size
+      Object.values(families).forEach(models => {
+        models.sort((a, b) => (a.size || 0) - (b.size || 0));
+      });
+
+      // Sort families alphabetically
+      const sortedFamilies = Object.keys(families).sort();
+
+      sortedFamilies.forEach(family => {
+        html += `<div class="model-family">
+          <div class="model-family-name">${family}</div>
+          <div class="model-family-variants">`;
+        html += families[family].map(m => {
+          const tag = m.name.split(':')[1] || 'latest';
+          const sizeStr = m.size ? (m.size / 1e9).toFixed(1) + ' GB' : '';
+          return `<div class="available-model-card" onclick="addPipelineModel('${m.name}', '${m.base_url}', '${m.label || m.name}')">
+            <span class="model-tag">${tag}</span>
+            <span class="model-size">${sizeStr}</span>
+          </div>`;
+        }).join('');
+        html += '</div></div>';
+      });
+    } else {
+      html += '<div class="pipeline-empty">All available models are in the pipeline</div>';
+    }
   } else {
-    html += '<div class="empty-msg">No Ollama models found. Is Ollama running?</div>';
+    html += '<div class="pipeline-empty">No Ollama models found — is Ollama running?</div>';
   }
 
-  // Custom endpoint
-  html += `<div style="margin-top:12px;font-size:12px;color:var(--text-dim);margin-bottom:8px;">Add custom endpoint:</div>
-    <div class="pipeline-add">
-      <input id="customModelName" placeholder="Model name (e.g. chandra)">
-      <input id="customModelUrl" placeholder="Base URL (e.g. http://chandra:8001/v1)">
-      <button class="btn btn-primary btn-sm" onclick="addCustomModel()">Add</button>
-    </div>`;
-
-  html += '</div>';
   body.innerHTML = html;
 }
 
@@ -739,11 +910,11 @@ function removePipelineModel(index) {
   renderPipeline();
 }
 
-function addCustomModel() {
-  const name = document.getElementById('customModelName').value.trim();
-  const url = document.getElementById('customModelUrl').value.trim();
-  if (!name || !url) return alert('Both name and URL are required');
-  pipelineConfig.push({ name, base_url: url, label: name });
+function movePipelineModel(index, direction) {
+  const newIndex = index + direction;
+  if (newIndex < 0 || newIndex >= pipelineConfig.length) return;
+  const item = pipelineConfig.splice(index, 1)[0];
+  pipelineConfig.splice(newIndex, 0, item);
   renderPipeline();
 }
 

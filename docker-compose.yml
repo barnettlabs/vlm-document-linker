@@ -37,7 +37,7 @@ services:
 
   # ----------------------------------------------------------
   # OLLAMA-GPU0 -- RTX 3080 10GB
-  # Serves: qwen3.5:9b (6.6GB)
+  # Serves: qwen3-vl:2b (1.9GB)
   # Profile: models
   # ----------------------------------------------------------
   ollama-gpu0:
@@ -51,7 +51,7 @@ services:
     ports:
       - "11434:11434"
     volumes:
-      - ollama-data-gpu0:/root/.ollama
+      - ollama-data:/root/.ollama
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "ollama", "list"]
@@ -76,7 +76,7 @@ services:
     ports:
       - "11435:11434"
     volumes:
-      - ollama-data-gpu1:/root/.ollama
+      - ollama-data:/root/.ollama
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "ollama", "list"]
@@ -96,7 +96,7 @@ services:
     depends_on:
       ollama-gpu0:
         condition: service_healthy
-    entrypoint: ["sh", "-c", "ollama pull qwen3.5:9b"]
+    entrypoint: ["sh", "-c", "ollama pull qwen3-vl:2b"]
     environment:
       - OLLAMA_HOST=ollama-gpu0:11434
     restart: "no"
@@ -152,6 +152,7 @@ services:
       - WORKER_ID=pipeline
       - OUTPUT_DIR=/output
       - AUTO_ACCEPT_THRESHOLD=0.85
+      - PAGE_STRATEGY=all
     volumes:
       - ./input:/input:ro
       - ./output:/output
@@ -194,7 +195,7 @@ services:
     environment:
       - REDIS_HOST=redis
       - INPUT_DIR=/input
-      - OLLAMA_ENDPOINTS=http://ollama-gpu0:11434,http://ollama-gpu1:11434
+      - OLLAMA_ENDPOINTS=http://ollama-gpu0:11434
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ./input:/input:ro
@@ -205,5 +206,4 @@ services:
 
 volumes:
   redis-data:
-  ollama-data-gpu0:  # Ollama model cache (RTX 3080)
-  ollama-data-gpu1:  # Ollama model cache (RTX 3060 Ti)
+  ollama-data:  # Shared Ollama model cache

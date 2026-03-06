@@ -175,18 +175,21 @@ def get_available_models():
             seen_urls.add(ollama_root)
 
     models = []
+    seen_models = set()
     for ollama_root in seen_urls:
         try:
             req = urllib.request.Request(f"{ollama_root}/api/tags")
             with urllib.request.urlopen(req, timeout=5) as resp:
                 data = json.loads(resp.read().decode())
                 for model in data.get("models", []):
-                    models.append({
-                        "name": model["name"],
-                        "base_url": f"{ollama_root}/v1",
-                        "label": model["name"],
-                        "size": model.get("size", 0),
-                    })
+                    if model["name"] not in seen_models:
+                        seen_models.add(model["name"])
+                        models.append({
+                            "name": model["name"],
+                            "base_url": f"{ollama_root}/v1",
+                            "label": model["name"],
+                            "size": model.get("size", 0),
+                        })
         except Exception:
             pass
 

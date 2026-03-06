@@ -48,7 +48,7 @@ Return ONLY valid JSON, no markdown, no explanation:
 }"""
 
 DEFAULT_PIPELINE = [
-    {"name": "qwen3.5:9b", "base_url": "http://ollama-gpu0:11434/v1", "label": "Qwen 3.5 9B"},
+    {"name": "qwen3-vl:2b", "base_url": "http://ollama-gpu0:11434/v1", "label": "Qwen3-VL 2B"},
     {"name": "glm-ocr", "base_url": "http://ollama-gpu1:11434/v1", "label": "GLM-OCR 0.9B"},
 ]
 
@@ -67,56 +67,65 @@ def get_pipeline():
 
 
 # -- File handling -----------------------------------------------------------
-def file_to_base64(path: Path) -> tuple[str, str]:
-    """Convert any supported file to base64 JPEG for vision model ingestion."""
+def pdf_page_to_base64(doc, page_num: int) -> tuple[str, str]:
+    """Convert a single PDF page to base64 JPEG."""
+    mat = fitz.Matrix(150 / 72, 150 / 72)
+    pix = doc[page_num].get_pixmap(matrix=mat)
+    data = pix.tobytes("jpeg")
+    return base64.b64encode(data).decode(), "image/jpeg"
+
+
+def file_to_images(path: Path) -> list[tuple[str, str, int]]:
+    """Convert a file to a list of (base64_data, media_type, page_num) tuples.
+
+    For PDFs, returns one entry per page. For images, returns a single entry.
+    """
     suffix = path.suffix.lower()
 
     if suffix == ".pdf":
         doc = fitz.open(str(path))
-        mat = fitz.Matrix(150 / 72, 150 / 72)
-        pix = doc[0].get_pixmap(matrix=mat)
-        data = pix.tobytes("jpeg")
-        return base64.b64encode(data).decode(), "image/jpeg"
+        pages = []
+        for i in range(len(doc)):
+            b64, media = pdf_page_to_base64(doc, i)
+            pages.append((b64, media, i + 1))
+        return pages
 
     elif suffix in {".jpg", ".jpeg"}:
         with open(path, "rb") as f:
-            return base64.b64encode(f.read()).decode(), "image/jpeg"
+            return [(base64.b64encode(f.read()).decode(), "image/jpeg", 1)]
 
     elif suffix == ".png":
         img = Image.open(path).convert("RGB")
         buf = io.BytesIO()
         img.save(buf, format="JPEG", quality=85)
-        return base64.b64encode(buf.getvalue()).decode(), "image/jpeg"
+        return [(base64.b64encode(buf.getvalue()).decode(), "image/jpeg", 1)]
 
     else:
         raise ValueError(f"Unsupported file type: {suffix}")
 
 
 # -- Model calling -----------------------------------------------------------
-def call_model(path: Path, model_config: dict) -> dict:
-    """Send image to a model endpoint and parse the JSON result."""
+def call_model_with_images(images: list[tuple[str, str]], model_config: dict) -> dict:
+    """Send one or more images to a model endpoint and parse the JSON result.
+
+    images: list of (base64_data, media_type) tuples.
+    """
     client = openai.OpenAI(base_url=model_config["base_url"], api_key="not-needed")
-    image_data, media_type = file_to_base64(path)
+
+    content = []
+    for image_data, media_type in images:
+        content.append({
+            "type": "image_url",
+            "image_url": {"url": f"data:{media_type};base64,{image_data}"},
+        })
+    content.append({"type": "text", "text": PROMPT})
 
     t0 = time.time()
     response = client.chat.completions.create(
         model=model_config["name"],
         max_tokens=2048,
         temperature=0.0,
-        messages=[
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": f"data:{media_type};base64,{image_data}"
-                        },
-                    },
-                    {"type": "text", "text": PROMPT},
-                ],
-            }
-        ],
+        messages=[{"role": "user", "content": content}],
     )
     elapsed = round(time.time() - t0, 2)
 
@@ -172,6 +181,64 @@ def run_triage(passes: list[dict]) -> tuple[str, str | None]:
         return "needs_review", None
 
 
+# -- Page strategy -----------------------------------------------------------
+# "smart"  = try page 1 first, if no result try remaining pages one at a time
+# "all"    = send all pages as multiple images in a single request
+PAGE_STRATEGY = os.environ.get("PAGE_STRATEGY", "smart")
+
+
+def run_model_on_file(model_config: dict, all_pages: list[tuple[str, str, int]]) -> dict:
+    """Run a single model against a file's pages using the configured strategy."""
+    label = model_config.get("label", model_config["name"])
+
+    if PAGE_STRATEGY == "all":
+        # Send all pages in one request
+        images = [(b64, media) for b64, media, _ in all_pages]
+        page_nums = [p for _, _, p in all_pages]
+        print(f"[{WORKER_ID}]   Running {label} (all {len(images)} pages)...", flush=True)
+        result = call_model_with_images(images, model_config)
+        result["pages_sent"] = page_nums
+        return result
+
+    # Smart strategy: try page 1, then remaining pages if needed
+    first_page = [(all_pages[0][0], all_pages[0][1])]
+    print(f"[{WORKER_ID}]   Running {label} (page 1)...", flush=True)
+    result = call_model_with_images(first_page, model_config)
+    result["pages_sent"] = [1]
+
+    # If we got a result from page 1, we're done
+    if result.get("license_number") and result.get("confidence", 0) > 0:
+        return result
+
+    # Try remaining pages one at a time
+    for b64, media, page_num in all_pages[1:]:
+        print(f"[{WORKER_ID}]   Running {label} (page {page_num})...", flush=True)
+        page_result = call_model_with_images([(b64, media)], model_config)
+
+        if page_result.get("license_number") and page_result.get("confidence", 0) > 0:
+            # Accumulate token usage and time from the extra page calls
+            page_result["inference_seconds"] = round(
+                result["inference_seconds"] + page_result["inference_seconds"], 2
+            )
+            page_result["prompt_tokens"] = result["prompt_tokens"] + page_result["prompt_tokens"]
+            page_result["completion_tokens"] = result["completion_tokens"] + page_result["completion_tokens"]
+            page_result["total_tokens"] = page_result["prompt_tokens"] + page_result["completion_tokens"]
+            page_result["pages_sent"] = result["pages_sent"] + [page_num]
+            return page_result
+
+        # No result on this page either — accumulate stats and keep going
+        result["inference_seconds"] = round(
+            result["inference_seconds"] + page_result["inference_seconds"], 2
+        )
+        result["prompt_tokens"] += page_result["prompt_tokens"]
+        result["completion_tokens"] += page_result["completion_tokens"]
+        result["total_tokens"] = result["prompt_tokens"] + result["completion_tokens"]
+        result["pages_sent"].append(page_num)
+
+    # No result found on any page
+    return result
+
+
 # -- Processing --------------------------------------------------------------
 def process_file(path_str: str) -> dict:
     """Run a file through all pipeline models and triage the results."""
@@ -179,21 +246,26 @@ def process_file(path_str: str) -> dict:
     if not path.exists():
         raise FileNotFoundError(f"File not found: {path_str}")
 
+    all_pages = file_to_images(path)
+    total_pages = len(all_pages)
+    if total_pages > 1:
+        print(f"[{WORKER_ID}]   PDF has {total_pages} pages (strategy: {PAGE_STRATEGY})", flush=True)
+
     pipeline = get_pipeline()
     passes = []
 
     for model_config in pipeline:
         label = model_config.get("label", model_config["name"])
-        print(f"[{WORKER_ID}]   Running {label}...", flush=True)
 
         try:
-            result = call_model(path, model_config)
+            result = run_model_on_file(model_config, all_pages)
             passes.append(result)
+            pages_info = f", pages: {result.get('pages_sent', [1])}" if total_pages > 1 else ""
             print(
                 f"[{WORKER_ID}]   {label}: "
                 f"{result.get('license_number')} "
                 f"(confidence: {result.get('confidence')}, "
-                f"{result.get('inference_seconds')}s)",
+                f"{result.get('inference_seconds')}s{pages_info})",
                 flush=True,
             )
         except Exception as e:
@@ -213,6 +285,7 @@ def process_file(path_str: str) -> dict:
     return {
         "original_filename": path.name,
         "path": path_str,
+        "total_pages": total_pages,
         "passes": passes,
         "status": status,
         "final_value": final_value,

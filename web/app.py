@@ -41,6 +41,7 @@ docker_client = docker.DockerClient(base_url="unix:///var/run/docker.sock")
 MANAGED_CONTAINERS = [
     "vdl-ollama-gpu0",
     "vdl-ollama-gpu1",
+    "vdl-ollama-multi",
     "vdl-worker",
     "vdl-enqueuer",
     "vdl-exporter",

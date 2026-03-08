@@ -1010,8 +1010,8 @@ async function openFileModal(path) {
     (file.passes || []).forEach((p, i) => {
       html += `<div class="pass-card">
         <div class="pass-model">${p.model}</div>
-        <div class="pass-row"><span>License #</span><span class="val mono">${p.license_number || 'null'}</span></div>
-        <div class="pass-row"><span>Field</span><span class="val">${p.field_label || '-'}</span></div>
+        <div class="pass-row"><span>Certificate #</span><span class="val mono">${p.certificate_number || 'null'}</span></div>
+        <div class="pass-row"><span>Found</span><span class="val">${p.found != null ? p.found : '-'}</span></div>
         <div class="pass-row"><span>Confidence</span><span class="val">${p.confidence != null ? p.confidence : '-'}</span></div>
         <div class="pass-row"><span>Time</span><span class="val">${p.inference_seconds != null ? p.inference_seconds + 's' : '-'}</span></div>
         <div class="pass-row"><span>Prompt tokens</span><span class="val">${p.prompt_tokens ? p.prompt_tokens.toLocaleString() : '-'}</span></div>

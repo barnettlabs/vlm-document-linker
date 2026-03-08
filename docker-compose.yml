@@ -86,6 +86,31 @@ services:
       start_period: 30s
 
   # ----------------------------------------------------------
+  # OLLAMA-MULTI -- 3x RTX 3060 Ti (24GB combined)
+  # For running larger models split across GPUs
+  # Profile: models
+  # ----------------------------------------------------------
+  ollama-multi:
+    image: ollama/ollama:latest
+    container_name: vdl-ollama-multi
+    profiles: ["models"]
+    runtime: nvidia
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=GPU-8487b266-25c9-3369-8894-d94a07344f17,GPU-d9f2c052-9dcb-15db-2e3a-889b7a8bd5fb,GPU-50b74d27-cfe4-571c-65b0-9ff9b344cb18
+      - OLLAMA_HOST=0.0.0.0
+    ports:
+      - "11436:11434"
+    volumes:
+      - ollama-data:/root/.ollama
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  # ----------------------------------------------------------
   # MODEL PULLS -- one-shot init to pull models on each GPU
   # Runs once, then exits. Safe to re-run.
   # Commented out: models already downloaded, shared via ollama-data volume
@@ -195,7 +220,7 @@ services:
     environment:
       - REDIS_HOST=redis
       - INPUT_DIR=/input
-      - OLLAMA_ENDPOINTS=http://ollama-gpu0:11434,http://ollama-gpu1:11434
+      - OLLAMA_ENDPOINTS=http://ollama-gpu0:11434,http://ollama-gpu1:11434,http://ollama-multi:11434
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock

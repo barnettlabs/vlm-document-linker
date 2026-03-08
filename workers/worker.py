@@ -34,17 +34,23 @@ MAX_RETRIES = 3
 AUTO_ACCEPT_THRESHOLD = float(os.environ.get("AUTO_ACCEPT_THRESHOLD", "0.85"))
 
 PROMPT = """/nothink
-You are extracting structured data from a government or legal document.
+You are extracting a certificate number from a lead inspection certificate.
 
-Extract the primary license, certificate, or tracking number from this document.
-Look for fields labeled: Certificate No, License No, Tracking No, Permit No,
-Accreditation No, Case No, or similar identifier fields.
+Find the value of the field labeled "INSPECTION CERTIFICATE NO" in this document.
+This field should always be present on the document. It is typically a numeric or
+alphanumeric identifier.
+
+Rules:
+- Return the exact value shown in the field, do not modify or reformat it.
+- confidence should reflect how clearly you can read the value (0.0 to 1.0).
+- If you cannot find a field labeled "INSPECTION CERTIFICATE NO", set found to false
+  and leave certificate_number as null.
 
 Return ONLY valid JSON, no markdown, no explanation:
 {
-  "license_number": "the extracted number or null if not found",
-  "field_label": "the label of the field you found it in",
-  "confidence": 0.0
+  "certificate_number": "the extracted value or null",
+  "found": true,
+  "confidence": 0.95
 }"""
 
 DEFAULT_PIPELINE = [
@@ -157,10 +163,12 @@ def run_triage(passes: list[dict]) -> tuple[str, str | None]:
     if not successful:
         return "needs_review", None
 
-    numbers = [p.get("license_number") for p in successful if p.get("license_number")]
+    numbers = [p.get("certificate_number") for p in successful if p.get("certificate_number")]
     confidences = [p.get("confidence", 0) for p in successful]
 
-    if not numbers:
+    # If the field wasn't found by any model, flag for review
+    not_found = all(p.get("found") is False for p in successful)
+    if not numbers or not_found:
         return "needs_review", None
 
     all_agree = len(set(numbers)) == 1
@@ -191,8 +199,9 @@ def process_file(path_str: str) -> dict:
             passes.append(result)
             print(
                 f"[{WORKER_ID}]   {label}: "
-                f"{result.get('license_number')} "
-                f"(confidence: {result.get('confidence')}, "
+                f"{result.get('certificate_number')} "
+                f"(found: {result.get('found')}, "
+                f"confidence: {result.get('confidence')}, "
                 f"{result.get('inference_seconds')}s)",
                 flush=True,
             )

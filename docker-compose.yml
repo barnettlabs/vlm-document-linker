@@ -88,30 +88,31 @@ services:
   # ----------------------------------------------------------
   # MODEL PULLS -- one-shot init to pull models on each GPU
   # Runs once, then exits. Safe to re-run.
+  # Commented out: models already downloaded, shared via ollama-data volume
   # ----------------------------------------------------------
-  ollama-pull-gpu0:
-    image: ollama/ollama:latest
-    container_name: vdl-ollama-pull-gpu0
-    profiles: ["models"]
-    depends_on:
-      ollama-gpu0:
-        condition: service_healthy
-    entrypoint: ["sh", "-c", "ollama pull qwen3-vl:2b"]
-    environment:
-      - OLLAMA_HOST=ollama-gpu0:11434
-    restart: "no"
+  # ollama-pull-gpu0:
+  #   image: ollama/ollama:latest
+  #   container_name: vdl-ollama-pull-gpu0
+  #   profiles: ["models"]
+  #   depends_on:
+  #     ollama-gpu0:
+  #       condition: service_healthy
+  #   entrypoint: ["sh", "-c", "ollama pull qwen3-vl:2b"]
+  #   environment:
+  #     - OLLAMA_HOST=ollama-gpu0:11434
+  #   restart: "no"
 
-  ollama-pull-gpu1:
-    image: ollama/ollama:latest
-    container_name: vdl-ollama-pull-gpu1
-    profiles: ["models"]
-    depends_on:
-      ollama-gpu1:
-        condition: service_healthy
-    entrypoint: ["sh", "-c", "ollama pull glm-ocr"]
-    environment:
-      - OLLAMA_HOST=ollama-gpu1:11434
-    restart: "no"
+  # ollama-pull-gpu1:
+  #   image: ollama/ollama:latest
+  #   container_name: vdl-ollama-pull-gpu1
+  #   profiles: ["models"]
+  #   depends_on:
+  #     ollama-gpu1:
+  #       condition: service_healthy
+  #   entrypoint: ["sh", "-c", "ollama pull glm-ocr"]
+  #   environment:
+  #     - OLLAMA_HOST=ollama-gpu1:11434
+  #   restart: "no"
 
   # ----------------------------------------------------------
   # ENQUEUER -- scans /input, pushes files into Redis queue

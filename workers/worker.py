@@ -73,15 +73,29 @@ def get_pipeline():
 
 
 # -- File handling -----------------------------------------------------------
-def file_to_base64(path: Path) -> tuple[str, str]:
+def get_page_count(path: Path) -> int:
+    """Return the number of pages for a file (1 for images)."""
+    suffix = path.suffix.lower()
+    if suffix == ".pdf":
+        doc = fitz.open(str(path))
+        count = len(doc)
+        doc.close()
+        return count
+    return 1
+
+
+def file_to_base64(path: Path, page: int = 0) -> tuple[str, str]:
     """Convert any supported file to base64 JPEG for vision model ingestion."""
     suffix = path.suffix.lower()
 
     if suffix == ".pdf":
         doc = fitz.open(str(path))
+        if page >= len(doc):
+            raise ValueError(f"Page {page} does not exist (PDF has {len(doc)} pages)")
         mat = fitz.Matrix(150 / 72, 150 / 72)
-        pix = doc[0].get_pixmap(matrix=mat)
+        pix = doc[page].get_pixmap(matrix=mat)
         data = pix.tobytes("jpeg")
+        doc.close()
         return base64.b64encode(data).decode(), "image/jpeg"
 
     elif suffix in {".jpg", ".jpeg"}:
@@ -99,10 +113,10 @@ def file_to_base64(path: Path) -> tuple[str, str]:
 
 
 # -- Model calling -----------------------------------------------------------
-def call_model(path: Path, model_config: dict) -> dict:
+def call_model(path: Path, model_config: dict, page: int = 0) -> dict:
     """Send image to a model endpoint and parse the JSON result."""
     client = openai.OpenAI(base_url=model_config["base_url"], api_key="not-needed")
-    image_data, media_type = file_to_base64(path)
+    image_data, media_type = file_to_base64(path, page=page)
 
     t0 = time.time()
     response = client.chat.completions.create(
@@ -147,6 +161,7 @@ def call_model(path: Path, model_config: dict) -> dict:
 
     result = json.loads(raw)
     result["model"] = model_config["name"]
+    result["page"] = page
     result["inference_seconds"] = elapsed
     result["prompt_tokens"] = prompt_tokens
     result["completion_tokens"] = completion_tokens
@@ -163,13 +178,14 @@ def run_triage(passes: list[dict]) -> tuple[str, str | None]:
     if not successful:
         return "needs_review", None
 
-    numbers = [p.get("certificate_number") for p in successful if p.get("certificate_number")]
-    confidences = [p.get("confidence", 0) for p in successful]
+    # Only consider passes where the field was actually found
+    found_passes = [p for p in successful if p.get("found") and p.get("certificate_number")]
 
-    # If the field wasn't found by any model, flag for review
-    not_found = all(p.get("found") is False for p in successful)
-    if not numbers or not_found:
+    if not found_passes:
         return "needs_review", None
+
+    numbers = [p.get("certificate_number") for p in found_passes]
+    confidences = [p.get("confidence", 0) for p in found_passes]
 
     all_agree = len(set(numbers)) == 1
     avg_confidence = sum(confidences) / len(confidences) if confidences else 0
@@ -189,33 +205,46 @@ def process_file(path_str: str) -> dict:
 
     pipeline = get_pipeline()
     passes = []
+    num_pages = get_page_count(path)
 
     for model_config in pipeline:
         label = model_config.get("label", model_config["name"])
-        print(f"[{WORKER_ID}]   Running {label}...", flush=True)
+        found = False
 
-        try:
-            result = call_model(path, model_config)
-            passes.append(result)
-            print(
-                f"[{WORKER_ID}]   {label}: "
-                f"{result.get('certificate_number')} "
-                f"(found: {result.get('found')}, "
-                f"confidence: {result.get('confidence')}, "
-                f"{result.get('inference_seconds')}s)",
-                flush=True,
-            )
-        except Exception as e:
-            passes.append({
-                "model": model_config["name"],
-                "license_number": None,
-                "field_label": None,
-                "confidence": 0.0,
-                "inference_seconds": None,
-                "error": str(e),
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-            })
-            print(f"[{WORKER_ID}]   {label}: FAILED - {e}", flush=True)
+        for page in range(num_pages):
+            page_label = f"{label} (page {page + 1}/{num_pages})" if num_pages > 1 else label
+            print(f"[{WORKER_ID}]   Running {page_label}...", flush=True)
+
+            try:
+                result = call_model(path, model_config, page=page)
+                passes.append(result)
+                print(
+                    f"[{WORKER_ID}]   {page_label}: "
+                    f"{result.get('certificate_number')} "
+                    f"(found: {result.get('found')}, "
+                    f"confidence: {result.get('confidence')}, "
+                    f"{result.get('inference_seconds')}s)",
+                    flush=True,
+                )
+                # Stop scanning pages for this model if field was found
+                if result.get("found") and result.get("certificate_number"):
+                    found = True
+                    break
+            except Exception as e:
+                passes.append({
+                    "model": model_config["name"],
+                    "page": page,
+                    "certificate_number": None,
+                    "found": False,
+                    "confidence": 0.0,
+                    "inference_seconds": None,
+                    "error": str(e),
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                })
+                print(f"[{WORKER_ID}]   {page_label}: FAILED - {e}", flush=True)
+
+        if not found and num_pages > 1:
+            print(f"[{WORKER_ID}]   {label}: field not found on any of {num_pages} pages", flush=True)
 
     status, final_value = run_triage(passes)
 

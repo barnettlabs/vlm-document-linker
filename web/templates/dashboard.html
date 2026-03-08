@@ -534,6 +534,20 @@
 
   .pass-card .pass-row .val { color: var(--text); }
 
+  .page-controls {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    padding: 8px;
+    background: var(--surface);
+    border-top: 1px solid var(--border);
+    font-size: 12px;
+    color: var(--text-dim);
+  }
+
+  .page-controls .btn { padding: 4px 10px; }
+
   .loading {
     text-align: center;
     padding: 60px;
@@ -654,8 +668,15 @@
       <button class="btn btn-sm" onclick="closeModal()">Close</button>
     </div>
     <div class="modal-body">
-      <div class="modal-image">
-        <img id="modalImage" src="" alt="Document">
+      <div style="display:flex;flex-direction:column;flex:1;overflow:hidden;">
+        <div class="modal-image">
+          <img id="modalImage" src="" alt="Document">
+        </div>
+        <div class="page-controls" id="pageControls" style="display:none;">
+          <button class="btn btn-sm" id="prevPageBtn" onclick="modalChangePage(-1)">Prev</button>
+          <span id="pageIndicator">Page 1 / 1</span>
+          <button class="btn btn-sm" id="nextPageBtn" onclick="modalChangePage(1)">Next</button>
+        </div>
       </div>
       <div class="modal-details" id="modalDetails"></div>
     </div>
@@ -977,16 +998,53 @@ async function savePipeline() {
 
 // -- File Modal --
 
+let modalCurrentPath = '';
+let modalCurrentPage = 0;
+let modalTotalPages = 1;
+
+function modalChangePage(delta) {
+  const newPage = modalCurrentPage + delta;
+  if (newPage < 0 || newPage >= modalTotalPages) return;
+  modalCurrentPage = newPage;
+  document.getElementById('modalImage').src =
+    '/api/file-image?path=' + encodeURIComponent(modalCurrentPath) + '&page=' + modalCurrentPage;
+  document.getElementById('pageIndicator').textContent =
+    `Page ${modalCurrentPage + 1} / ${modalTotalPages}`;
+  document.getElementById('prevPageBtn').disabled = modalCurrentPage === 0;
+  document.getElementById('nextPageBtn').disabled = modalCurrentPage === modalTotalPages - 1;
+}
+
 async function openFileModal(path) {
   const modal = document.getElementById('fileModal');
   const img = document.getElementById('modalImage');
   const details = document.getElementById('modalDetails');
   const title = document.getElementById('modalTitle');
+  const pageControls = document.getElementById('pageControls');
 
+  modalCurrentPath = path;
+  modalCurrentPage = 0;
   title.textContent = path.split('/').pop();
-  img.src = '/api/file-image?path=' + encodeURIComponent(path);
+  img.src = '/api/file-image?path=' + encodeURIComponent(path) + '&page=0';
   details.innerHTML = '<div class="empty-msg">Loading...</div>';
+  pageControls.style.display = 'none';
   modal.classList.add('active');
+
+  // Fetch page count
+  try {
+    const infoResp = await fetch('/api/file-info?path=' + encodeURIComponent(path));
+    if (infoResp.ok) {
+      const info = await infoResp.json();
+      modalTotalPages = info.pages || 1;
+      if (modalTotalPages > 1) {
+        pageControls.style.display = 'flex';
+        document.getElementById('pageIndicator').textContent = `Page 1 / ${modalTotalPages}`;
+        document.getElementById('prevPageBtn').disabled = true;
+        document.getElementById('nextPageBtn').disabled = modalTotalPages <= 1;
+      }
+    }
+  } catch (e) {
+    console.error('File info error:', e);
+  }
 
   try {
     const resp = await fetch('/api/file-detail?path=' + encodeURIComponent(path));
@@ -1009,7 +1067,7 @@ async function openFileModal(path) {
 
     (file.passes || []).forEach((p, i) => {
       html += `<div class="pass-card">
-        <div class="pass-model">${p.model}</div>
+        <div class="pass-model">${p.model}${p.page != null ? ' (page ' + (p.page + 1) + ')' : ''}</div>
         <div class="pass-row"><span>Certificate #</span><span class="val mono">${p.certificate_number || 'null'}</span></div>
         <div class="pass-row"><span>Found</span><span class="val">${p.found != null ? p.found : '-'}</span></div>
         <div class="pass-row"><span>Confidence</span><span class="val">${p.confidence != null ? p.confidence : '-'}</span></div>

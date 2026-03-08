@@ -223,6 +223,11 @@
         <div class="preview-area" id="previewArea">
           <span class="empty-msg">Select a file above</span>
         </div>
+        <div id="previewPageControls" style="display:none;margin-top:8px;text-align:center;">
+          <button class="btn btn-sm" id="previewPrevBtn" onclick="previewChangePage(-1)">Prev</button>
+          <span style="font-size:12px;color:var(--text-dim);margin:0 8px;" id="previewPageIndicator">Page 1 / 1</span>
+          <button class="btn btn-sm" id="previewNextBtn" onclick="previewChangePage(1)">Next</button>
+        </div>
       </div>
     </div>
 
@@ -248,6 +253,21 @@
 <script>
 let endpoints = [];
 let allModels = [];
+let previewCurrentPage = 0;
+let previewTotalPages = 1;
+let previewCurrentFile = '';
+
+function previewChangePage(delta) {
+  const newPage = previewCurrentPage + delta;
+  if (newPage < 0 || newPage >= previewTotalPages) return;
+  previewCurrentPage = newPage;
+  document.getElementById('previewArea').innerHTML =
+    `<img src="/api/file-image?path=${encodeURIComponent(previewCurrentFile)}&page=${previewCurrentPage}" alt="Preview">`;
+  document.getElementById('previewPageIndicator').textContent =
+    `Page ${previewCurrentPage + 1} / ${previewTotalPages}`;
+  document.getElementById('previewPrevBtn').disabled = previewCurrentPage === 0;
+  document.getElementById('previewNextBtn').disabled = previewCurrentPage === previewTotalPages - 1;
+}
 
 const CLAUDE_MODELS = [
   { name: 'claude-sonnet-4-20250514', label: 'Claude Sonnet 4 ($3/$15 per M tokens)' },
@@ -312,14 +332,38 @@ function onProviderChange() {
   updateRunButton();
 }
 
-function onFileChange() {
+async function onFileChange() {
   const fileSelect = document.getElementById('fileSelect');
   const preview = document.getElementById('previewArea');
+  const pageControls = document.getElementById('previewPageControls');
+
+  previewCurrentPage = 0;
+  previewTotalPages = 1;
+  previewCurrentFile = fileSelect.value;
 
   if (fileSelect.value) {
-    preview.innerHTML = `<img src="/api/file-image?path=${encodeURIComponent(fileSelect.value)}" alt="Preview">`;
+    preview.innerHTML = `<img src="/api/file-image?path=${encodeURIComponent(fileSelect.value)}&page=0" alt="Preview">`;
+
+    try {
+      const resp = await fetch('/api/file-info?path=' + encodeURIComponent(fileSelect.value));
+      if (resp.ok) {
+        const info = await resp.json();
+        previewTotalPages = info.pages || 1;
+        if (previewTotalPages > 1) {
+          pageControls.style.display = 'block';
+          document.getElementById('previewPageIndicator').textContent = `Page 1 / ${previewTotalPages}`;
+          document.getElementById('previewPrevBtn').disabled = true;
+          document.getElementById('previewNextBtn').disabled = false;
+        } else {
+          pageControls.style.display = 'none';
+        }
+      }
+    } catch (e) {
+      console.error('File info error:', e);
+    }
   } else {
     preview.innerHTML = '<span class="empty-msg">Select a file above</span>';
+    pageControls.style.display = 'none';
   }
   updateRunButton();
 }

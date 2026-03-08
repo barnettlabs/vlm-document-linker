@@ -380,9 +380,35 @@ def get_available_models():
 
 # -- File Serving ------------------------------------------------------------
 
+@app.route("/api/file-info")
+def file_info():
+    """Return metadata about a file (page count, type)."""
+    file_path = request.args.get("path")
+    if not file_path:
+        abort(400)
+
+    path = Path(file_path)
+    if not path.exists():
+        abort(404)
+
+    try:
+        path.resolve().relative_to(Path(INPUT_DIR).resolve())
+    except ValueError:
+        abort(403)
+
+    suffix = path.suffix.lower()
+    pages = 1
+    if suffix == ".pdf":
+        doc = fitz.open(str(path))
+        pages = len(doc)
+        doc.close()
+
+    return jsonify({"pages": pages, "type": suffix})
+
+
 @app.route("/api/file-image")
 def serve_file_image():
-    """Serve a file as an image (renders PDFs to JPEG)."""
+    """Serve a file as an image (renders PDFs to JPEG). Accepts ?page=N for PDFs."""
     file_path = request.args.get("path")
     if not file_path:
         abort(400)
@@ -398,12 +424,17 @@ def serve_file_image():
         abort(403)
 
     suffix = path.suffix.lower()
+    page = int(request.args.get("page", 0))
 
     if suffix == ".pdf":
         doc = fitz.open(str(path))
+        if page >= len(doc):
+            doc.close()
+            abort(404)
         mat = fitz.Matrix(200 / 72, 200 / 72)  # 200 DPI for review
-        pix = doc[0].get_pixmap(matrix=mat)
+        pix = doc[page].get_pixmap(matrix=mat)
         img_bytes = pix.tobytes("jpeg")
+        doc.close()
         return send_file(io.BytesIO(img_bytes), mimetype="image/jpeg")
 
     elif suffix in {".jpg", ".jpeg"}:

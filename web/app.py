@@ -13,17 +13,27 @@ import redis
 import docker
 import fitz  # pymupdf for PDF rendering
 import base64
+import time
 import openai
+import anthropic
 from PIL import Image
 
 app = Flask(__name__)
 
 REDIS_HOST = os.environ.get("REDIS_HOST", "localhost")
 INPUT_DIR = os.environ.get("INPUT_DIR", "/input")
+ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 OLLAMA_ENDPOINTS = [
     url.strip() for url in
     os.environ.get("OLLAMA_ENDPOINTS", "").split(",") if url.strip()
 ]
+
+# Claude pricing per million tokens
+CLAUDE_PRICING = {
+    "claude-sonnet-4-20250514": {"input": 3.00, "output": 15.00},
+    "claude-haiku-4-5-20251001": {"input": 0.80, "output": 4.00},
+    "claude-opus-4-20250514": {"input": 15.00, "output": 75.00},
+}
 
 r = redis.Redis(host=REDIS_HOST, port=6379, decode_responses=True)
 docker_client = docker.DockerClient(base_url="unix:///var/run/docker.sock")
@@ -117,10 +127,14 @@ def test_run_model():
     file_path = request.json.get("file")
     model_name = request.json.get("model")
     base_url = request.json.get("base_url")
+    provider = request.json.get("provider", "ollama")
     prompt = request.json.get("prompt", "OCR this document")
 
-    if not all([file_path, model_name, base_url]):
-        return jsonify({"error": "file, model, and base_url required"}), 400
+    if not file_path or not model_name:
+        return jsonify({"error": "file and model required"}), 400
+
+    if provider == "ollama" and not base_url:
+        return jsonify({"error": "base_url required for Ollama models"}), 400
 
     path = Path(file_path)
     if not path.exists():
@@ -134,39 +148,101 @@ def test_run_model():
     try:
         image_data, media_type = file_to_base64(file_path)
 
-        import time
-        client = openai.OpenAI(base_url=base_url, api_key="not-needed")
-        t0 = time.time()
-        response = client.chat.completions.create(
-            model=model_name,
-            max_tokens=2048,
-            temperature=0.0,
-            messages=[{
-                "role": "user",
-                "content": [
-                    {
-                        "type": "image_url",
-                        "image_url": {"url": f"data:{media_type};base64,{image_data}"},
-                    },
-                    {"type": "text", "text": prompt},
-                ],
-            }],
-        )
-        elapsed = round(time.time() - t0, 2)
-
-        usage = getattr(response, "usage", None)
-        raw_content = response.choices[0].message.content or ""
-
-        return jsonify({
-            "raw_response": raw_content,
-            "model": model_name,
-            "elapsed_seconds": elapsed,
-            "prompt_tokens": getattr(usage, "prompt_tokens", 0) or 0,
-            "completion_tokens": getattr(usage, "completion_tokens", 0) or 0,
-        })
+        if provider == "claude":
+            return _run_claude(model_name, image_data, media_type, prompt)
+        else:
+            return _run_ollama(model_name, base_url, image_data, media_type, prompt)
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+def _run_ollama(model_name, base_url, image_data, media_type, prompt):
+    client = openai.OpenAI(base_url=base_url, api_key="not-needed")
+    t0 = time.time()
+    response = client.chat.completions.create(
+        model=model_name,
+        max_tokens=2048,
+        temperature=0.0,
+        messages=[{
+            "role": "user",
+            "content": [
+                {
+                    "type": "image_url",
+                    "image_url": {"url": f"data:{media_type};base64,{image_data}"},
+                },
+                {"type": "text", "text": prompt},
+            ],
+        }],
+    )
+    elapsed = round(time.time() - t0, 2)
+
+    usage = getattr(response, "usage", None)
+    raw_content = response.choices[0].message.content or ""
+    prompt_tokens = getattr(usage, "prompt_tokens", 0) or 0
+    completion_tokens = getattr(usage, "completion_tokens", 0) or 0
+
+    return jsonify({
+        "raw_response": raw_content,
+        "provider": "ollama",
+        "model": model_name,
+        "elapsed_seconds": elapsed,
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": completion_tokens,
+    })
+
+
+def _run_claude(model_name, image_data, media_type, prompt):
+    if not ANTHROPIC_API_KEY:
+        return jsonify({"error": "ANTHROPIC_API_KEY not configured"}), 400
+
+    client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+    t0 = time.time()
+    response = client.messages.create(
+        model=model_name,
+        max_tokens=2048,
+        messages=[{
+            "role": "user",
+            "content": [
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": media_type,
+                        "data": image_data,
+                    },
+                },
+                {"type": "text", "text": prompt},
+            ],
+        }],
+    )
+    elapsed = round(time.time() - t0, 2)
+
+    raw_content = response.content[0].text if response.content else ""
+    prompt_tokens = response.usage.input_tokens
+    completion_tokens = response.usage.output_tokens
+
+    # Calculate cost
+    pricing = CLAUDE_PRICING.get(model_name, {"input": 0, "output": 0})
+    input_cost = (prompt_tokens / 1_000_000) * pricing["input"]
+    output_cost = (completion_tokens / 1_000_000) * pricing["output"]
+    total_cost = input_cost + output_cost
+
+    return jsonify({
+        "raw_response": raw_content,
+        "provider": "claude",
+        "model": model_name,
+        "elapsed_seconds": elapsed,
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": completion_tokens,
+        "cost": {
+            "input_cost": round(input_cost, 6),
+            "output_cost": round(output_cost, 6),
+            "total_cost": round(total_cost, 6),
+            "input_rate": pricing["input"],
+            "output_rate": pricing["output"],
+        },
+    })
 
 
 # -- Status API --------------------------------------------------------------

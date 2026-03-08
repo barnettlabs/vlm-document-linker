@@ -196,6 +196,7 @@ services:
       - REDIS_HOST=redis
       - INPUT_DIR=/input
       - OLLAMA_ENDPOINTS=http://ollama-gpu0:11434,http://ollama-gpu1:11434
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ./input:/input:ro

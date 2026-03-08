@@ -191,12 +191,19 @@
           <select id="fileSelect"><option value="">Loading files...</option></select>
         </div>
         <div class="form-group">
+          <label>Provider</label>
+          <select id="providerSelect">
+            <option value="ollama">Ollama (Local)</option>
+            <option value="claude">Claude API</option>
+          </select>
+        </div>
+        <div class="form-group" id="gpuGroup">
           <label>GPU Service</label>
           <select id="gpuSelect"></select>
         </div>
         <div class="form-group">
           <label>Model</label>
-          <select id="modelSelect"><option value="">Select GPU first</option></select>
+          <select id="modelSelect"><option value="">Loading...</option></select>
         </div>
         <div class="form-group">
           <button class="btn btn-primary" id="runBtn" onclick="runTest()" disabled>Run Test</button>
@@ -228,6 +235,11 @@
           <span>Prompt tokens: <span class="val" id="metaPrompt">-</span></span>
           <span>Completion tokens: <span class="val" id="metaCompletion">-</span></span>
         </div>
+        <div class="meta-row" id="costRow" style="display:none;">
+          <span>This request: <span class="val" id="metaCost">-</span></span>
+          <span>Estimated per 1k docs: <span class="val" id="metaCostBulk">-</span></span>
+          <span>Rate: <span class="val" id="metaRate">-</span></span>
+        </div>
       </div>
     </div>
   </div>
@@ -236,6 +248,12 @@
 <script>
 let endpoints = [];
 let allModels = [];
+
+const CLAUDE_MODELS = [
+  { name: 'claude-sonnet-4-20250514', label: 'Claude Sonnet 4 ($3/$15 per M tokens)' },
+  { name: 'claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5 ($0.80/$4 per M tokens)' },
+  { name: 'claude-opus-4-20250514', label: 'Claude Opus 4 ($15/$75 per M tokens)' },
+];
 
 async function init() {
   const [filesResp, modelsResp] = await Promise.all([
@@ -263,25 +281,34 @@ async function init() {
     `<option value="${ep.base_url}">${ep.label}</option>`
   ).join('');
 
-  // Populate models
-  populateModels();
+  // Populate models for default provider
+  onProviderChange();
 
   fileSelect.addEventListener('change', onFileChange);
-  gpuSelect.addEventListener('change', populateModels);
+  document.getElementById('providerSelect').addEventListener('change', onProviderChange);
   updateRunButton();
 }
 
-function populateModels() {
+function onProviderChange() {
+  const provider = document.getElementById('providerSelect').value;
+  const gpuGroup = document.getElementById('gpuGroup');
   const modelSelect = document.getElementById('modelSelect');
-  if (allModels.length === 0) {
-    modelSelect.innerHTML = '<option value="">No models found</option>';
-    updateRunButton();
-    return;
-  }
 
-  modelSelect.innerHTML = allModels.map(m =>
-    `<option value="${m.name}">${m.name}</option>`
-  ).join('');
+  if (provider === 'claude') {
+    gpuGroup.style.display = 'none';
+    modelSelect.innerHTML = CLAUDE_MODELS.map(m =>
+      `<option value="${m.name}">${m.label}</option>`
+    ).join('');
+  } else {
+    gpuGroup.style.display = '';
+    if (allModels.length === 0) {
+      modelSelect.innerHTML = '<option value="">No models found</option>';
+    } else {
+      modelSelect.innerHTML = allModels.map(m =>
+        `<option value="${m.name}">${m.name}</option>`
+      ).join('');
+    }
+  }
   updateRunButton();
 }
 
@@ -306,22 +333,28 @@ function updateRunButton() {
 async function runTest() {
   const file = document.getElementById('fileSelect').value;
   const model = document.getElementById('modelSelect').value;
+  const provider = document.getElementById('providerSelect').value;
   const baseUrl = document.getElementById('gpuSelect').value;
   const prompt = document.getElementById('promptInput').value;
   const responseArea = document.getElementById('responseArea');
   const metaRow = document.getElementById('metaRow');
+  const costRow = document.getElementById('costRow');
   const runBtn = document.getElementById('runBtn');
 
   runBtn.disabled = true;
   runBtn.innerHTML = '<span class="spinner"></span>Running...';
   responseArea.textContent = 'Waiting for response...';
   metaRow.style.display = 'none';
+  costRow.style.display = 'none';
 
   try {
+    const body = { file, model, provider, prompt };
+    if (provider === 'ollama') body.base_url = baseUrl;
+
     const resp = await fetch('/api/test/run', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ file, model, base_url: baseUrl, prompt }),
+      body: JSON.stringify(body),
     });
 
     const data = await resp.json();
@@ -334,6 +367,14 @@ async function runTest() {
       document.getElementById('metaPrompt').textContent = data.prompt_tokens.toLocaleString();
       document.getElementById('metaCompletion').textContent = data.completion_tokens.toLocaleString();
       metaRow.style.display = 'flex';
+
+      if (data.cost) {
+        document.getElementById('metaCost').textContent = '$' + data.cost.total_cost.toFixed(4);
+        document.getElementById('metaCostBulk').textContent = '$' + (data.cost.total_cost * 1000).toFixed(2);
+        document.getElementById('metaRate').textContent =
+          `$${data.cost.input_rate}/M in, $${data.cost.output_rate}/M out`;
+        costRow.style.display = 'flex';
+      }
     }
   } catch (e) {
     responseArea.textContent = 'ERROR: ' + e.message;

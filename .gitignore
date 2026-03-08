@@ -1,3 +1,4 @@
 input/*
 input-base
 output/
+.env

@@ -12,6 +12,9 @@ from flask import Flask, render_template, jsonify, request, send_file, abort
 import redis
 import docker
 import fitz  # pymupdf for PDF rendering
+import base64
+import openai
+from PIL import Image
 
 app = Flask(__name__)
 
@@ -65,6 +68,105 @@ def dashboard():
 @app.route("/review")
 def review_page():
     return render_template("review.html")
+
+
+@app.route("/test")
+def test_page():
+    return render_template("test.html")
+
+
+# -- Test API ----------------------------------------------------------------
+
+def file_to_base64(file_path: str) -> tuple[str, str]:
+    """Convert a file to base64 JPEG for vision model ingestion."""
+    path = Path(file_path)
+    suffix = path.suffix.lower()
+
+    if suffix == ".pdf":
+        doc = fitz.open(str(path))
+        mat = fitz.Matrix(150 / 72, 150 / 72)
+        pix = doc[0].get_pixmap(matrix=mat)
+        data = pix.tobytes("jpeg")
+        return base64.b64encode(data).decode(), "image/jpeg"
+    elif suffix in {".jpg", ".jpeg"}:
+        with open(path, "rb") as f:
+            return base64.b64encode(f.read()).decode(), "image/jpeg"
+    elif suffix == ".png":
+        img = Image.open(path).convert("RGB")
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=85)
+        return base64.b64encode(buf.getvalue()).decode(), "image/jpeg"
+    else:
+        raise ValueError(f"Unsupported file type: {suffix}")
+
+
+@app.route("/api/test/files")
+def test_list_files():
+    """List available files in the input directory."""
+    input_path = Path(INPUT_DIR)
+    files = []
+    for f in sorted(input_path.rglob("*")):
+        if f.suffix.lower() in {".pdf", ".jpg", ".jpeg", ".png"}:
+            files.append(str(f))
+    return jsonify({"files": files})
+
+
+@app.route("/api/test/run", methods=["POST"])
+def test_run_model():
+    """Run a single model against a file and return the raw response."""
+    file_path = request.json.get("file")
+    model_name = request.json.get("model")
+    base_url = request.json.get("base_url")
+    prompt = request.json.get("prompt", "OCR this document")
+
+    if not all([file_path, model_name, base_url]):
+        return jsonify({"error": "file, model, and base_url required"}), 400
+
+    path = Path(file_path)
+    if not path.exists():
+        return jsonify({"error": f"File not found: {file_path}"}), 404
+
+    try:
+        path.resolve().relative_to(Path(INPUT_DIR).resolve())
+    except ValueError:
+        return jsonify({"error": "File must be within input directory"}), 403
+
+    try:
+        image_data, media_type = file_to_base64(file_path)
+
+        import time
+        client = openai.OpenAI(base_url=base_url, api_key="not-needed")
+        t0 = time.time()
+        response = client.chat.completions.create(
+            model=model_name,
+            max_tokens=2048,
+            temperature=0.0,
+            messages=[{
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:{media_type};base64,{image_data}"},
+                    },
+                    {"type": "text", "text": prompt},
+                ],
+            }],
+        )
+        elapsed = round(time.time() - t0, 2)
+
+        usage = getattr(response, "usage", None)
+        raw_content = response.choices[0].message.content or ""
+
+        return jsonify({
+            "raw_response": raw_content,
+            "model": model_name,
+            "elapsed_seconds": elapsed,
+            "prompt_tokens": getattr(usage, "prompt_tokens", 0) or 0,
+            "completion_tokens": getattr(usage, "completion_tokens", 0) or 0,
+        })
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 # -- Status API --------------------------------------------------------------

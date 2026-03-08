@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Model Test — VLM Document Linker</title>
+<style>
+  :root {
+    --bg: #0f1117;
+    --surface: #1a1d27;
+    --surface2: #232736;
+    --border: #2e3348;
+    --text: #e1e4ed;
+    --text-dim: #8b90a5;
+    --green: #34d399;
+    --red: #f87171;
+    --yellow: #fbbf24;
+    --blue: #60a5fa;
+    --purple: #a78bfa;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+  }
+
+  .header {
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    padding: 16px 24px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .header h1 { font-size: 20px; font-weight: 600; }
+  .header a { color: var(--blue); text-decoration: none; font-size: 13px; }
+
+  .container { max-width: 1200px; margin: 0 auto; padding: 24px; }
+
+  .panel {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    margin-bottom: 24px;
+    overflow: hidden;
+  }
+
+  .panel-header {
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .panel-header h2 { font-size: 16px; font-weight: 600; }
+
+  .panel-body { padding: 16px 20px; }
+
+  .form-row {
+    display: flex;
+    gap: 12px;
+    align-items: flex-end;
+    margin-bottom: 12px;
+    flex-wrap: wrap;
+  }
+
+  .form-group { display: flex; flex-direction: column; gap: 4px; }
+  .form-group.flex-1 { flex: 1; min-width: 200px; }
+
+  .form-group label {
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--text-dim);
+    font-weight: 500;
+  }
+
+  select, textarea {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    font-size: 13px;
+    padding: 8px 10px;
+    font-family: inherit;
+  }
+
+  select:focus, textarea:focus { outline: 1px solid var(--blue); }
+
+  textarea {
+    font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+    font-size: 12px;
+    resize: vertical;
+    min-height: 80px;
+  }
+
+  .btn {
+    padding: 8px 18px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--surface2);
+    color: var(--text);
+    font-size: 13px;
+    cursor: pointer;
+    transition: background 0.15s;
+    white-space: nowrap;
+  }
+
+  .btn:hover { background: var(--border); }
+  .btn-primary { border-color: rgba(96,165,250,0.3); color: var(--blue); }
+  .btn-primary:hover { background: rgba(96,165,250,0.15); }
+  .btn:disabled { opacity: 0.4; cursor: default; }
+
+  .test-layout {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 24px;
+  }
+
+  .preview-area {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px;
+    min-height: 300px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .preview-area img { max-width: 100%; max-height: 500px; border-radius: 4px; }
+
+  .response-area {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px;
+    min-height: 300px;
+    font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+    font-size: 12px;
+    white-space: pre-wrap;
+    word-break: break-word;
+    overflow-y: auto;
+    max-height: 600px;
+  }
+
+  .meta-row {
+    display: flex;
+    gap: 16px;
+    font-size: 12px;
+    color: var(--text-dim);
+    margin-top: 8px;
+  }
+
+  .meta-row .val { color: var(--text); font-weight: 500; }
+
+  .spinner {
+    display: inline-block;
+    width: 16px;
+    height: 16px;
+    border: 2px solid var(--border);
+    border-top-color: var(--blue);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+    margin-right: 8px;
+    vertical-align: middle;
+  }
+
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .empty-msg { color: var(--text-dim); font-size: 13px; text-align: center; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>Model Test</h1>
+  <a href="/">Back to Dashboard</a>
+</div>
+
+<div class="container">
+  <div class="panel">
+    <div class="panel-header"><h2>Test Configuration</h2></div>
+    <div class="panel-body">
+      <div class="form-row">
+        <div class="form-group flex-1">
+          <label>File</label>
+          <select id="fileSelect"><option value="">Loading files...</option></select>
+        </div>
+        <div class="form-group">
+          <label>GPU Service</label>
+          <select id="gpuSelect"></select>
+        </div>
+        <div class="form-group">
+          <label>Model</label>
+          <select id="modelSelect"><option value="">Select GPU first</option></select>
+        </div>
+        <div class="form-group">
+          <button class="btn btn-primary" id="runBtn" onclick="runTest()" disabled>Run Test</button>
+        </div>
+      </div>
+      <div class="form-group">
+        <label>Prompt</label>
+        <textarea id="promptInput">OCR this document</textarea>
+      </div>
+    </div>
+  </div>
+
+  <div class="test-layout">
+    <div class="panel">
+      <div class="panel-header"><h2>Document Preview</h2></div>
+      <div class="panel-body">
+        <div class="preview-area" id="previewArea">
+          <span class="empty-msg">Select a file above</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-header"><h2>Raw Response</h2></div>
+      <div class="panel-body">
+        <div class="response-area" id="responseArea">Select a file and model, then click Run Test</div>
+        <div class="meta-row" id="metaRow" style="display:none;">
+          <span>Time: <span class="val" id="metaTime">-</span></span>
+          <span>Prompt tokens: <span class="val" id="metaPrompt">-</span></span>
+          <span>Completion tokens: <span class="val" id="metaCompletion">-</span></span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+let endpoints = [];
+let allModels = [];
+
+async function init() {
+  const [filesResp, modelsResp] = await Promise.all([
+    fetch('/api/test/files'),
+    fetch('/api/pipeline/models'),
+  ]);
+
+  const filesData = await filesResp.json();
+  const modelsData = await modelsResp.json();
+
+  endpoints = modelsData.endpoints || [];
+  allModels = modelsData.models || [];
+
+  // Populate file select
+  const fileSelect = document.getElementById('fileSelect');
+  fileSelect.innerHTML = '<option value="">-- Select a file --</option>';
+  filesData.files.forEach(f => {
+    const name = f.split('/').pop();
+    fileSelect.innerHTML += `<option value="${f}">${name}</option>`;
+  });
+
+  // Populate GPU select
+  const gpuSelect = document.getElementById('gpuSelect');
+  gpuSelect.innerHTML = endpoints.map(ep =>
+    `<option value="${ep.base_url}">${ep.label}</option>`
+  ).join('');
+
+  // Populate models
+  populateModels();
+
+  fileSelect.addEventListener('change', onFileChange);
+  gpuSelect.addEventListener('change', populateModels);
+  updateRunButton();
+}
+
+function populateModels() {
+  const modelSelect = document.getElementById('modelSelect');
+  if (allModels.length === 0) {
+    modelSelect.innerHTML = '<option value="">No models found</option>';
+    updateRunButton();
+    return;
+  }
+
+  modelSelect.innerHTML = allModels.map(m =>
+    `<option value="${m.name}">${m.name}</option>`
+  ).join('');
+  updateRunButton();
+}
+
+function onFileChange() {
+  const fileSelect = document.getElementById('fileSelect');
+  const preview = document.getElementById('previewArea');
+
+  if (fileSelect.value) {
+    preview.innerHTML = `<img src="/api/file-image?path=${encodeURIComponent(fileSelect.value)}" alt="Preview">`;
+  } else {
+    preview.innerHTML = '<span class="empty-msg">Select a file above</span>';
+  }
+  updateRunButton();
+}
+
+function updateRunButton() {
+  const file = document.getElementById('fileSelect').value;
+  const model = document.getElementById('modelSelect').value;
+  document.getElementById('runBtn').disabled = !file || !model;
+}
+
+async function runTest() {
+  const file = document.getElementById('fileSelect').value;
+  const model = document.getElementById('modelSelect').value;
+  const baseUrl = document.getElementById('gpuSelect').value;
+  const prompt = document.getElementById('promptInput').value;
+  const responseArea = document.getElementById('responseArea');
+  const metaRow = document.getElementById('metaRow');
+  const runBtn = document.getElementById('runBtn');
+
+  runBtn.disabled = true;
+  runBtn.innerHTML = '<span class="spinner"></span>Running...';
+  responseArea.textContent = 'Waiting for response...';
+  metaRow.style.display = 'none';
+
+  try {
+    const resp = await fetch('/api/test/run', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ file, model, base_url: baseUrl, prompt }),
+    });
+
+    const data = await resp.json();
+
+    if (data.error) {
+      responseArea.textContent = 'ERROR: ' + data.error;
+    } else {
+      responseArea.textContent = data.raw_response;
+      document.getElementById('metaTime').textContent = data.elapsed_seconds + 's';
+      document.getElementById('metaPrompt').textContent = data.prompt_tokens.toLocaleString();
+      document.getElementById('metaCompletion').textContent = data.completion_tokens.toLocaleString();
+      metaRow.style.display = 'flex';
+    }
+  } catch (e) {
+    responseArea.textContent = 'ERROR: ' + e.message;
+  }
+
+  runBtn.disabled = false;
+  runBtn.textContent = 'Run Test';
+}
+
+init();
+</script>
+</body>
+</html>

@@ -152,7 +152,6 @@ services:
       - WORKER_ID=pipeline
       - OUTPUT_DIR=/output
       - AUTO_ACCEPT_THRESHOLD=0.85
-      - PAGE_STRATEGY=all
     volumes:
       - ./input:/input:ro
       - ./output:/output
@@ -195,7 +194,7 @@ services:
     environment:
       - REDIS_HOST=redis
       - INPUT_DIR=/input
-      - OLLAMA_ENDPOINTS=http://ollama-gpu0:11434
+      - OLLAMA_ENDPOINTS=http://ollama-gpu0:11434,http://ollama-gpu1:11434
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ./input:/input:ro

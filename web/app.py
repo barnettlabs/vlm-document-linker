@@ -186,14 +186,19 @@ def get_available_models():
                         seen_models.add(model["name"])
                         models.append({
                             "name": model["name"],
-                            "base_url": f"{ollama_root}/v1",
                             "label": model["name"],
                             "size": model.get("size", 0),
                         })
         except Exception:
             pass
 
-    return jsonify({"models": models})
+    # Build friendly endpoint labels from hostnames
+    endpoints = []
+    for url in OLLAMA_ENDPOINTS:
+        host = url.replace("http://", "").replace("https://", "").split(":")[0]
+        endpoints.append({"label": host, "base_url": f"{url}/v1"})
+
+    return jsonify({"models": models, "endpoints": endpoints})
 
 
 # -- File Serving ------------------------------------------------------------

@@ -596,6 +596,27 @@
     <!-- Model stats -->
     <div class="model-stats-grid" id="modelStatsGrid"></div>
 
+    <!-- Cost estimates -->
+    <div class="panel" id="costPanel" style="display:none;">
+      <div class="panel-header">
+        <h2>Estimated Hosted API Costs</h2>
+        <span style="font-size:12px;color:var(--text-dim);">What this workload would cost on hosted vision LLMs</span>
+      </div>
+      <div class="panel-body" style="max-height:none;">
+        <table class="results-table" id="costTable">
+          <thead><tr>
+            <th>Provider</th>
+            <th>Input Rate</th>
+            <th>Output Rate</th>
+            <th>Input Cost</th>
+            <th>Output Cost</th>
+            <th>Total Cost</th>
+          </tr></thead>
+          <tbody id="costBody"></tbody>
+        </table>
+      </div>
+    </div>
+
     <!-- Pipeline Config -->
     <div class="panel">
       <div class="panel-header">
@@ -637,7 +658,7 @@
           <thead><tr>
             <th>File</th>
             <th>Status</th>
-            <th>Final Value</th>
+            <th>Document ID</th>
             <th>Passes</th>
             <th>Time</th>
             <th>Confidence</th>
@@ -708,6 +729,7 @@ async function refresh() {
 function render() {
   renderStats();
   renderModelStats();
+  renderCostEstimates();
   renderProcessing();
   renderQueue();
   renderFiles();
@@ -725,6 +747,8 @@ function renderStats() {
     { label: 'Needs Review', value: data.needs_review, cls: data.needs_review > 0 ? 'yellow' : 'green', sub: data.needs_review > 0 ? 'Click Review Queue' : 'All clear' },
     { label: 'Reviewed', value: data.reviewed, cls: 'blue', sub: 'Manually verified' },
     { label: 'Errors', value: data.errored, cls: data.errored > 0 ? 'red' : 'green', sub: data.errored > 0 ? 'Check below' : 'None' },
+    { label: 'Input Tokens', value: (data.token_totals?.prompt_tokens || 0).toLocaleString(), cls: 'cyan', sub: `~${(data.token_totals?.avg_prompt_per_file || 0).toLocaleString()} avg/file` },
+    { label: 'Output Tokens', value: (data.token_totals?.completion_tokens || 0).toLocaleString(), cls: 'orange', sub: `~${(data.token_totals?.avg_completion_per_file || 0).toLocaleString()} avg/file` },
     { label: 'Total Tokens', value: (data.token_totals?.total_tokens || 0).toLocaleString(), cls: 'purple', sub: `~${(data.token_totals?.avg_tokens_per_file || 0).toLocaleString()} avg/file` },
   ];
 
@@ -761,6 +785,30 @@ function renderModelStats() {
       <div class="model-stat-row"><span>Avg prompt tokens</span><span class="val">${avgPrompt.toLocaleString()}</span></div>
       <div class="model-stat-row"><span>Avg completion tokens</span><span class="val">${avgCompletion.toLocaleString()}</span></div>
     </div>`;
+  }).join('');
+}
+
+function renderCostEstimates() {
+  const panel = document.getElementById('costPanel');
+  const body = document.getElementById('costBody');
+  const estimates = data.cost_estimates;
+
+  if (!estimates || estimates.length === 0 || (data.token_totals?.total_tokens || 0) === 0) {
+    panel.style.display = 'none';
+    return;
+  }
+
+  panel.style.display = '';
+  body.innerHTML = estimates.map(e => {
+    const fmt = v => v < 0.01 ? '$' + v.toFixed(4) : '$' + v.toFixed(2);
+    return `<tr>
+      <td style="font-weight:600;">${e.provider}</td>
+      <td class="mono" style="font-size:12px;color:var(--text-dim)">$${e.input_rate}/M</td>
+      <td class="mono" style="font-size:12px;color:var(--text-dim)">$${e.output_rate}/M</td>
+      <td class="mono" style="font-size:12px;color:var(--cyan)">${fmt(e.input_cost)}</td>
+      <td class="mono" style="font-size:12px;color:var(--orange)">${fmt(e.output_cost)}</td>
+      <td class="mono" style="font-size:12px;font-weight:600;">${fmt(e.total_cost)}</td>
+    </tr>`;
   }).join('');
 }
 
@@ -830,7 +878,7 @@ function renderFiles() {
     return `<tr>
       <td><span class="clickable" onclick="openFileModal('${path}')" title="${f.path || ''}">${f.original_filename || '-'}</span></td>
       <td>${statusBadge(f.status)}</td>
-      <td class="mono">${f.final_value || '-'}</td>
+      <td class="mono">${f.document_id || '-'}</td>
       <td>${passSummary}</td>
       <td class="mono" style="font-size:12px">${(() => {
         const passes = f.passes || [];
@@ -1057,7 +1105,7 @@ async function openFileModal(path) {
     let html = '';
     html += `<h3>Status</h3>`;
     html += `<div style="margin-bottom:8px;">${statusBadge(file.status)}</div>`;
-    html += `<div style="font-size:13px;margin-bottom:4px;">Final value: <strong class="mono">${file.final_value || 'none'}</strong></div>`;
+    html += `<div style="font-size:13px;margin-bottom:4px;">Document ID: <strong class="mono">${file.document_id || 'none'}</strong></div>`;
 
     if (file.reviewed_by) {
       html += `<div style="font-size:12px;color:var(--text-dim);">Reviewed by: ${file.reviewed_by}</div>`;

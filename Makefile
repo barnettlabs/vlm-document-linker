@@ -7,9 +7,9 @@
 
 DC = docker compose
 
-.PHONY: help up down restart web web-rebuild web-logs \
+.PHONY: help up down restart rebuild web web-rebuild web-logs \
         models worker worker-rebuild worker-logs \
-        enqueue export status \
+        enqueue export jobs-rebuild status \
         gpu0 gpu1 gpu-multi \
         ollama-shell-gpu0 ollama-shell-gpu1 ollama-shell-multi \
         queue-clear redis-cli logs ps
@@ -70,6 +70,11 @@ worker: ## Start pipeline worker
 worker-rebuild: ## Rebuild and restart worker
 	$(DC) --profile worker up -d --build worker
 
+rebuild: ## Rebuild worker, jobs, and web
+	$(DC) --profile worker --profile jobs build
+	$(DC) up -d --build web
+	$(DC) --profile worker up -d
+
 worker-logs: ## Tail worker logs
 	$(DC) --profile worker logs -f --tail=50 worker
 
@@ -80,6 +85,9 @@ enqueue: ## Scan input/ and enqueue new files
 
 export: ## Export results to CSV
 	$(DC) --profile jobs run --rm exporter
+
+jobs-rebuild: ## Rebuild enqueuer and exporter image
+	$(DC) --profile jobs build
 
 # -- Ollama shells ------------------------------------------
 

@@ -460,7 +460,7 @@ async function submitReview() {
   await fetch('/api/review', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ path: file.path, final_value: value }),
+    body: JSON.stringify({ path: file.path, document_id: value }),
   });
 
   // Remove from local list and move to next

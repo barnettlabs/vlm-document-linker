@@ -335,7 +335,7 @@ def process_file(path_str: str) -> dict:
         if not found and num_pages > 1:
             print(f"[{WORKER_ID}]   {label}: field not found on any of {num_pages} pages", flush=True)
 
-    status, final_value = run_triage(passes)
+    status, document_id = run_triage(passes)
 
     # For rental licenses with multiple found values, collect all unique numbers
     all_values = None
@@ -354,7 +354,7 @@ def process_file(path_str: str) -> dict:
         "doc_type": doc_type,
         "passes": passes,
         "status": status,
-        "final_value": final_value,
+        "document_id": document_id,
         "reviewed_by": None,
         "reviewed_at": None,
     }
@@ -402,7 +402,7 @@ while True:
 
         print(
             f"[{WORKER_ID}] -> {filename} -> {record['status']} "
-            f"(final: {record['final_value']}, {len(record['passes'])} passes)",
+            f"(document_id: {record['document_id']}, {len(record['passes'])} passes)",
             flush=True,
         )
 
@@ -423,7 +423,7 @@ while True:
                 "path": path_str,
                 "passes": [],
                 "status": "error",
-                "final_value": None,
+                "document_id": None,
                 "reviewed_by": None,
                 "reviewed_at": None,
                 "error": str(e),

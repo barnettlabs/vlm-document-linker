@@ -330,6 +330,41 @@ def _run_claude(model_name, image_data, media_type, prompt):
     })
 
 
+# -- Cost Estimation ---------------------------------------------------------
+
+# Hosted vision LLM pricing: (input $/M tokens, output $/M tokens)
+HOSTED_PRICING = {
+    "GPT-4o": {"input": 2.50, "output": 10.00},
+    "GPT-4o mini": {"input": 0.15, "output": 0.60},
+    "GPT-4.1": {"input": 2.00, "output": 8.00},
+    "GPT-4.1 mini": {"input": 0.40, "output": 1.60},
+    "GPT-4.1 nano": {"input": 0.10, "output": 0.40},
+    "Claude Sonnet 4": {"input": 3.00, "output": 15.00},
+    "Claude Haiku 4.5": {"input": 0.80, "output": 4.00},
+    "Claude Opus 4": {"input": 15.00, "output": 75.00},
+    "Gemini 2.5 Flash": {"input": 0.15, "output": 0.60},
+    "Gemini 2.5 Pro": {"input": 1.25, "output": 10.00},
+}
+
+
+def _estimate_costs(prompt_tokens: int, completion_tokens: int) -> list[dict]:
+    """Estimate what the current token usage would cost on hosted APIs."""
+    estimates = []
+    for name, pricing in HOSTED_PRICING.items():
+        input_cost = (prompt_tokens / 1_000_000) * pricing["input"]
+        output_cost = (completion_tokens / 1_000_000) * pricing["output"]
+        estimates.append({
+            "provider": name,
+            "input_rate": pricing["input"],
+            "output_rate": pricing["output"],
+            "input_cost": round(input_cost, 4),
+            "output_cost": round(output_cost, 4),
+            "total_cost": round(input_cost + output_cost, 4),
+        })
+    estimates.sort(key=lambda x: x["total_cost"])
+    return estimates
+
+
 # -- Status API --------------------------------------------------------------
 
 @app.route("/api/status")
@@ -394,6 +429,12 @@ def api_status():
     grand_completion_tokens = sum(s["total_completion_tokens"] for s in model_stats.values())
     grand_total_tokens = sum(s["total_tokens"] for s in model_stats.values())
     files_with_passes = sum(1 for f in files if f.get("passes"))
+    avg_prompt = round(grand_prompt_tokens / files_with_passes) if files_with_passes else 0
+    avg_completion = round(grand_completion_tokens / files_with_passes) if files_with_passes else 0
+
+    # Cost estimates: what this workload would cost on hosted vision APIs
+    # Prices per million tokens (input / output)
+    cost_estimates = _estimate_costs(grand_prompt_tokens, grand_completion_tokens)
 
     return jsonify({
         "queue_pending": queue_pending,
@@ -410,8 +451,11 @@ def api_status():
             "prompt_tokens": grand_prompt_tokens,
             "completion_tokens": grand_completion_tokens,
             "total_tokens": grand_total_tokens,
+            "avg_prompt_per_file": avg_prompt,
+            "avg_completion_per_file": avg_completion,
             "avg_tokens_per_file": round(grand_total_tokens / files_with_passes) if files_with_passes else 0,
         },
+        "cost_estimates": cost_estimates,
         "files": sorted(files, key=lambda x: x.get("original_filename", "")),
     })
 
@@ -574,10 +618,10 @@ def review_queue():
 def submit_review():
     """Submit a human review decision."""
     file_path = request.json.get("path")
-    final_value = request.json.get("final_value")
+    document_id = request.json.get("document_id")
 
-    if not file_path or final_value is None:
-        return jsonify({"error": "path and final_value required"}), 400
+    if not file_path or document_id is None:
+        return jsonify({"error": "path and document_id required"}), 400
 
     raw = r.hget("files", file_path)
     if not raw:
@@ -585,7 +629,7 @@ def submit_review():
 
     record = json.loads(raw)
     record["status"] = "reviewed"
-    record["final_value"] = final_value
+    record["document_id"] = document_id
     record["reviewed_by"] = "human"
     record["reviewed_at"] = datetime.now(timezone.utc).isoformat()
 

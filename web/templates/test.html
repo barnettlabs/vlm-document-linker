@@ -17,6 +17,8 @@
     --yellow: #fbbf24;
     --blue: #60a5fa;
     --purple: #a78bfa;
+    --cyan: #22d3ee;
+    --orange: #fb923c;
   }
 
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -53,29 +55,32 @@
   .panel-header {
     padding: 16px 20px;
     border-bottom: 1px solid var(--border);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
   }
 
   .panel-header h2 { font-size: 16px; font-weight: 600; }
 
   .panel-body { padding: 16px 20px; }
 
-  .form-row {
-    display: flex;
-    gap: 12px;
-    align-items: flex-end;
-    margin-bottom: 12px;
-    flex-wrap: wrap;
+  /* -- Config sections -- */
+  .config-section {
+    margin-bottom: 20px;
+    padding-bottom: 20px;
+    border-bottom: 1px solid var(--border);
   }
 
-  .form-group { display: flex; flex-direction: column; gap: 4px; }
-  .form-group.flex-1 { flex: 1; min-width: 200px; }
+  .config-section:last-child { border-bottom: none; margin-bottom: 0; padding-bottom: 0; }
 
-  .form-group label {
-    font-size: 12px;
+  .config-section label {
+    display: block;
+    font-size: 11px;
     text-transform: uppercase;
-    letter-spacing: 0.5px;
+    letter-spacing: 0.6px;
     color: var(--text-dim);
-    font-weight: 500;
+    font-weight: 600;
+    margin-bottom: 8px;
   }
 
   select, textarea {
@@ -86,6 +91,7 @@
     font-size: 13px;
     padding: 8px 10px;
     font-family: inherit;
+    width: 100%;
   }
 
   select:focus, textarea:focus { outline: 1px solid var(--blue); }
@@ -97,6 +103,7 @@
     min-height: 80px;
   }
 
+  /* -- Buttons -- */
   .btn {
     padding: 8px 18px;
     border-radius: 6px;
@@ -112,8 +119,157 @@
   .btn:hover { background: var(--border); }
   .btn-primary { border-color: rgba(96,165,250,0.3); color: var(--blue); }
   .btn-primary:hover { background: rgba(96,165,250,0.15); }
+  .btn-run {
+    padding: 10px 28px;
+    font-size: 14px;
+    font-weight: 600;
+    border-color: rgba(52,211,153,0.4);
+    color: var(--green);
+    background: rgba(52,211,153,0.08);
+  }
+  .btn-run:hover { background: rgba(52,211,153,0.18); }
   .btn:disabled { opacity: 0.4; cursor: default; }
 
+  /* -- Pill groups -- */
+  .pill-group {
+    display: inline-flex;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+
+  .pill {
+    padding: 7px 16px;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--text-dim);
+    background: var(--surface2);
+    border: none;
+    border-right: 1px solid var(--border);
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+    white-space: nowrap;
+  }
+
+  .pill:last-child { border-right: none; }
+  .pill:hover { background: var(--border); color: var(--text); }
+
+  .pill.active {
+    background: rgba(96,165,250,0.15);
+    color: var(--blue);
+    font-weight: 600;
+  }
+
+  /* -- Model family cards -- */
+  .model-families { display: flex; flex-direction: column; gap: 10px; }
+
+  .model-family-card {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px 14px;
+    transition: border-color 0.15s;
+  }
+
+  .model-family-card.has-active { border-color: rgba(96,165,250,0.4); }
+
+  .model-family-name {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--purple);
+    margin-bottom: 8px;
+  }
+
+  .model-variants {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .model-chip {
+    padding: 6px 12px;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--text-dim);
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.15s;
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+  }
+
+  .model-chip:hover { border-color: var(--blue); color: var(--text); background: var(--surface); }
+
+  .model-chip.active {
+    background: rgba(96,165,250,0.15);
+    color: var(--blue);
+    font-weight: 600;
+    border-color: rgba(96,165,250,0.5);
+  }
+
+  .model-chip .chip-size {
+    font-size: 10px;
+    font-weight: 400;
+    color: var(--text-dim);
+    opacity: 0.7;
+  }
+
+  .model-chip.active .chip-size { color: var(--blue); }
+
+  /* -- Prompt presets -- */
+  .prompt-presets {
+    display: inline-flex;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+    margin-bottom: 8px;
+  }
+
+  .prompt-pill {
+    padding: 6px 14px;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--text-dim);
+    background: var(--surface2);
+    border: none;
+    border-right: 1px solid var(--border);
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+    white-space: nowrap;
+  }
+
+  .prompt-pill:last-child { border-right: none; }
+  .prompt-pill:hover { background: var(--border); color: var(--text); }
+  .prompt-pill.active { background: rgba(96,165,250,0.15); color: var(--blue); font-weight: 600; }
+
+  /* -- Selection summary -- */
+  .selection-summary {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 14px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    font-size: 12px;
+    color: var(--text-dim);
+    margin-bottom: 16px;
+  }
+
+  .selection-summary .sel-tag {
+    padding: 3px 10px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 600;
+  }
+
+  .sel-set { background: rgba(52,211,153,0.12); color: var(--green); }
+  .sel-unset { background: rgba(251,191,36,0.12); color: var(--yellow); }
+
+  /* -- Result layout -- */
   .test-layout {
     display: grid;
     grid-template-columns: 1fr 1fr;
@@ -192,40 +348,59 @@
 </div>
 
 <div class="container">
+  <!-- Config panel -->
   <div class="panel">
-    <div class="panel-header"><h2>Test Configuration</h2></div>
+    <div class="panel-header">
+      <h2>Test Configuration</h2>
+      <button class="btn btn-run" id="runBtn" onclick="runTest()" disabled>Run Test</button>
+    </div>
     <div class="panel-body">
-      <div class="form-row">
-        <div class="form-group flex-1">
-          <label>File</label>
-          <select id="fileSelect"><option value="">Loading files...</option></select>
-        </div>
-        <div class="form-group">
-          <label>Provider</label>
-          <select id="providerSelect">
-            <option value="ollama">Ollama (Local)</option>
-            <option value="claude">Claude API</option>
-          </select>
-        </div>
-        <div class="form-group" id="gpuGroup">
-          <label>GPU Service</label>
-          <select id="gpuSelect"></select>
-        </div>
-        <div class="form-group">
-          <label>Model</label>
-          <select id="modelSelect"><option value="">Loading...</option></select>
-        </div>
-        <div class="form-group">
-          <button class="btn btn-primary" id="runBtn" onclick="runTest()" disabled>Run Test</button>
+
+      <!-- Selection summary bar -->
+      <div class="selection-summary" id="selectionSummary"></div>
+
+      <!-- File -->
+      <div class="config-section">
+        <label>Document</label>
+        <select id="fileSelect"><option value="">-- Select a file --</option></select>
+      </div>
+
+      <!-- Provider + GPU -->
+      <div class="config-section">
+        <label>Provider</label>
+        <div style="display:flex;gap:16px;align-items:flex-start;flex-wrap:wrap;">
+          <div class="pill-group" id="providerGroup">
+            <button class="pill active" data-value="ollama" onclick="selectPill(this, 'providerGroup'); onProviderChange()">Ollama (Local)</button>
+            <button class="pill" data-value="claude" onclick="selectPill(this, 'providerGroup'); onProviderChange()">Claude API</button>
+          </div>
+          <div id="gpuGroup" style="display:flex;align-items:center;gap:8px;">
+            <span style="font-size:11px;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.5px;">GPU:</span>
+            <div class="pill-group" id="gpuPills"></div>
+          </div>
         </div>
       </div>
-      <div class="form-group">
+
+      <!-- Model -->
+      <div class="config-section">
+        <label>Model</label>
+        <div class="model-families" id="modelArea">
+          <span class="empty-msg">Loading...</span>
+        </div>
+      </div>
+
+      <!-- Prompt -->
+      <div class="config-section">
         <label>Prompt</label>
+        <div class="prompt-presets" id="promptPresets">
+          <button class="prompt-pill active" data-key="custom" onclick="selectPromptPreset(this, 'custom')">Custom</button>
+        </div>
         <textarea id="promptInput">OCR this document</textarea>
       </div>
+
     </div>
   </div>
 
+  <!-- Results -->
   <div class="test-layout">
     <div class="panel">
       <div class="panel-header"><h2>Document Preview</h2></div>
@@ -258,16 +433,21 @@
 <script>
 let endpoints = [];
 let allModels = [];
+let promptPresets = {};
+let customPromptText = 'OCR this document';
+let selectedModel = '';
+
 const CLAUDE_MODELS = [
-  { name: 'claude-sonnet-4-20250514', label: 'Claude Sonnet 4 ($3/$15 per M tokens)' },
-  { name: 'claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5 ($0.80/$4 per M tokens)' },
-  { name: 'claude-opus-4-20250514', label: 'Claude Opus 4 ($15/$75 per M tokens)' },
+  { name: 'claude-sonnet-4-20250514', family: 'Claude', tag: 'Sonnet 4', price: '$3/$15 per M' },
+  { name: 'claude-haiku-4-5-20251001', family: 'Claude', tag: 'Haiku 4.5', price: '$0.80/$4 per M' },
+  { name: 'claude-opus-4-20250514', family: 'Claude', tag: 'Opus 4', price: '$15/$75 per M' },
 ];
 
 async function init() {
-  const [filesResp, modelsResp] = await Promise.all([
+  const [filesResp, modelsResp, promptsResp] = await Promise.all([
     fetch('/api/test/files'),
     fetch('/api/pipeline/models'),
+    fetch('/api/prompts'),
   ]);
 
   const filesData = await filesResp.json();
@@ -276,7 +456,7 @@ async function init() {
   endpoints = modelsData.endpoints || [];
   allModels = modelsData.models || [];
 
-  // Populate file select
+  // File select
   const fileSelect = document.getElementById('fileSelect');
   fileSelect.innerHTML = '<option value="">-- Select a file --</option>';
   filesData.files.forEach(f => {
@@ -284,42 +464,153 @@ async function init() {
     fileSelect.innerHTML += `<option value="${f}">${name}</option>`;
   });
 
-  // Populate GPU select
-  const gpuSelect = document.getElementById('gpuSelect');
-  gpuSelect.innerHTML = endpoints.map(ep =>
-    `<option value="${ep.base_url}">${ep.label}</option>`
-  ).join('');
+  // GPU pills
+  const gpuPills = document.getElementById('gpuPills');
+  gpuPills.innerHTML = endpoints.map(ep =>
+    `<button class="pill" data-value="${ep.base_url}" onclick="selectPill(this, 'gpuPills')">${ep.label}</button>`
+  ).join('') || '<span class="empty-msg">No GPU services</span>';
 
-  // Populate models for default provider
+  // Prompt presets
+  const promptsData = await promptsResp.json();
+  promptPresets = promptsData.presets || {};
+  renderPromptPresets();
+
+  // Models
   onProviderChange();
 
   fileSelect.addEventListener('change', onFileChange);
-  document.getElementById('providerSelect').addEventListener('change', onProviderChange);
-  updateRunButton();
+  updateState();
+}
+
+// -- Pill helpers --
+
+function selectPill(el, groupId) {
+  const group = document.getElementById(groupId);
+  group.querySelectorAll('.pill').forEach(p => p.classList.remove('active'));
+  el.classList.add('active');
+  updateState();
+}
+
+function getActivePillValue(groupId) {
+  const active = document.querySelector(`#${groupId} .pill.active`);
+  return active ? active.dataset.value : '';
+}
+
+// -- Model selection --
+
+function selectModel(el) {
+  // Deselect all chips
+  document.querySelectorAll('#modelArea .model-chip').forEach(c => c.classList.remove('active'));
+  el.classList.add('active');
+  selectedModel = el.dataset.value;
+
+  // Highlight the parent family card
+  document.querySelectorAll('#modelArea .model-family-card').forEach(c => c.classList.remove('has-active'));
+  el.closest('.model-family-card')?.classList.add('has-active');
+
+  updateState();
+}
+
+function groupByFamily(models) {
+  const families = {};
+  models.forEach(m => {
+    const parts = m.name.split(':');
+    const family = parts[0];
+    const tag = parts[1] || 'latest';
+    if (!families[family]) families[family] = [];
+    families[family].push({ ...m, tag });
+  });
+  // Sort variants by size within each family
+  Object.values(families).forEach(variants => {
+    variants.sort((a, b) => (a.size || 0) - (b.size || 0));
+  });
+  return families;
+}
+
+function renderOllamaModels() {
+  const area = document.getElementById('modelArea');
+
+  if (allModels.length === 0) {
+    area.innerHTML = '<span class="empty-msg">No Ollama models found — is Ollama running?</span>';
+    return;
+  }
+
+  const families = groupByFamily(allModels);
+  const sortedFamilies = Object.keys(families).sort();
+
+  area.innerHTML = sortedFamilies.map(family => {
+    const variants = families[family];
+    const chips = variants.map(m => {
+      const sizeStr = m.size ? (m.size / 1e9).toFixed(1) + ' GB' : '';
+      return `<button class="model-chip" data-value="${m.name}" onclick="selectModel(this)">
+        ${m.tag}${sizeStr ? `<span class="chip-size">${sizeStr}</span>` : ''}
+      </button>`;
+    }).join('');
+
+    return `<div class="model-family-card">
+      <div class="model-family-name">${family}</div>
+      <div class="model-variants">${chips}</div>
+    </div>`;
+  }).join('');
+}
+
+function renderClaudeModels() {
+  const area = document.getElementById('modelArea');
+
+  area.innerHTML = `<div class="model-family-card">
+    <div class="model-family-name">Claude</div>
+    <div class="model-variants">
+      ${CLAUDE_MODELS.map(m =>
+        `<button class="model-chip" data-value="${m.name}" onclick="selectModel(this)">
+          ${m.tag}<span class="chip-size">${m.price}</span>
+        </button>`
+      ).join('')}
+    </div>
+  </div>`;
 }
 
 function onProviderChange() {
-  const provider = document.getElementById('providerSelect').value;
+  const provider = getActivePillValue('providerGroup');
   const gpuGroup = document.getElementById('gpuGroup');
-  const modelSelect = document.getElementById('modelSelect');
+
+  selectedModel = '';
 
   if (provider === 'claude') {
     gpuGroup.style.display = 'none';
-    modelSelect.innerHTML = CLAUDE_MODELS.map(m =>
-      `<option value="${m.name}">${m.label}</option>`
-    ).join('');
+    renderClaudeModels();
   } else {
-    gpuGroup.style.display = '';
-    if (allModels.length === 0) {
-      modelSelect.innerHTML = '<option value="">No models found</option>';
-    } else {
-      modelSelect.innerHTML = allModels.map(m =>
-        `<option value="${m.name}">${m.name}</option>`
-      ).join('');
-    }
+    gpuGroup.style.display = 'flex';
+    renderOllamaModels();
   }
-  updateRunButton();
+
+  updateState();
 }
+
+// -- Prompt presets --
+
+function renderPromptPresets() {
+  const container = document.getElementById('promptPresets');
+  let html = '<button class="prompt-pill active" data-key="custom" onclick="selectPromptPreset(this, \'custom\')">Custom</button>';
+  for (const [key, preset] of Object.entries(promptPresets)) {
+    html += `<button class="prompt-pill" data-key="${key}" onclick="selectPromptPreset(this, '${key}')">${preset.label}</button>`;
+  }
+  container.innerHTML = html;
+}
+
+function selectPromptPreset(el, key) {
+  const textarea = document.getElementById('promptInput');
+  const activePill = el.parentElement.querySelector('.prompt-pill.active');
+  if (activePill && activePill.dataset.key === 'custom') {
+    customPromptText = textarea.value;
+  }
+
+  el.parentElement.querySelectorAll('.prompt-pill').forEach(p => p.classList.remove('active'));
+  el.classList.add('active');
+
+  textarea.value = key === 'custom' ? customPromptText : promptPresets[key].prompt;
+}
+
+// -- File preview --
 
 async function onFileChange() {
   const fileSelect = document.getElementById('fileSelect');
@@ -327,7 +618,7 @@ async function onFileChange() {
 
   if (!fileSelect.value) {
     preview.innerHTML = '<span class="empty-msg">Select a file above</span>';
-    updateRunButton();
+    updateState();
     return;
   }
 
@@ -352,20 +643,44 @@ async function onFileChange() {
     html += `<img src="/api/file-image?path=${encodeURIComponent(fileSelect.value)}&page=${i}" alt="Page ${i + 1}">`;
   }
   preview.innerHTML = html;
-  updateRunButton();
+  updateState();
 }
 
-function updateRunButton() {
+// -- State --
+
+function updateState() {
   const file = document.getElementById('fileSelect').value;
-  const model = document.getElementById('modelSelect').value;
-  document.getElementById('runBtn').disabled = !file || !model;
+  const provider = getActivePillValue('providerGroup');
+  const gpu = getActivePillValue('gpuPills');
+  const model = selectedModel;
+  const needsGpu = provider === 'ollama';
+
+  const canRun = file && model && (!needsGpu || gpu);
+  document.getElementById('runBtn').disabled = !canRun;
+
+  // Selection summary
+  const summary = document.getElementById('selectionSummary');
+  const fileName = file ? file.split('/').pop() : '';
+
+  const tag = (set, label) => set
+    ? `<span class="sel-tag sel-set">${label}</span>`
+    : `<span class="sel-tag sel-unset">${label}</span>`;
+
+  summary.innerHTML = [
+    tag(file, file ? fileName : 'No file'),
+    tag(provider, provider === 'claude' ? 'Claude' : 'Ollama'),
+    needsGpu ? tag(gpu, gpu ? endpoints.find(e => e.base_url === gpu)?.label || 'GPU' : 'No GPU') : '',
+    tag(model, model || 'No model'),
+  ].filter(Boolean).join('');
 }
+
+// -- Run test --
 
 async function runTest() {
   const file = document.getElementById('fileSelect').value;
-  const model = document.getElementById('modelSelect').value;
-  const provider = document.getElementById('providerSelect').value;
-  const baseUrl = document.getElementById('gpuSelect').value;
+  const model = selectedModel;
+  const provider = getActivePillValue('providerGroup');
+  const baseUrl = getActivePillValue('gpuPills');
   const prompt = document.getElementById('promptInput').value;
   const responseArea = document.getElementById('responseArea');
   const metaRow = document.getElementById('metaRow');

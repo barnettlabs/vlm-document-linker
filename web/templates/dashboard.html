@@ -365,18 +365,35 @@
     font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
   }
 
-  .gpu-select {
-    background: var(--surface2);
+  .gpu-pill-group {
+    display: inline-flex;
     border: 1px solid var(--border);
-    border-radius: 4px;
-    color: var(--text);
-    font-size: 11px;
-    padding: 2px 4px;
-    margin-bottom: 8px;
-    cursor: pointer;
+    border-radius: 8px;
+    overflow: hidden;
   }
 
-  .gpu-select:focus { outline: 1px solid var(--blue); }
+  .gpu-pill {
+    padding: 6px 14px;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--text-dim);
+    background: var(--surface2);
+    border: none;
+    border-right: 1px solid var(--border);
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+    white-space: nowrap;
+  }
+
+  .gpu-pill:last-child { border-right: none; }
+
+  .gpu-pill:hover { background: var(--border); color: var(--text); }
+
+  .gpu-pill.active {
+    background: rgba(96,165,250,0.15);
+    color: var(--blue);
+    font-weight: 600;
+  }
 
   .model-family-header {
     display: flex;
@@ -889,13 +906,13 @@ function renderPipeline() {
   html += '<div class="pipeline-section-label">Available Models</div>';
 
   if (availableModels.length > 0) {
-    // GPU service selector
-    const endpointOptions = ollamaEndpoints.map(ep =>
-      `<option value="${ep.base_url}">${ep.label}</option>`
+    // GPU service pill selector
+    const pills = ollamaEndpoints.map((ep, i) =>
+      `<button class="gpu-pill${i === 0 ? ' active' : ''}" data-url="${ep.base_url}" onclick="selectGpuPill(this)">${ep.label}</button>`
     ).join('');
-    html += `<div style="margin-bottom:12px;">
-      <label style="font-size:12px;color:var(--text-dim);margin-right:8px;">GPU Service:</label>
-      <select class="gpu-select" id="gpu-select-global">${endpointOptions}</select>
+    html += `<div style="margin-bottom:12px;display:flex;align-items:center;gap:10px;">
+      <span style="font-size:12px;color:var(--text-dim);">GPU Service:</span>
+      <div class="gpu-pill-group" id="gpu-pill-group">${pills}</div>
     </div>`;
 
     // Filter out models already in pipeline
@@ -957,9 +974,18 @@ function addModelWithGpu(name, selectId) {
   renderPipeline();
 }
 
+function selectGpuPill(el) {
+  el.parentElement.querySelectorAll('.gpu-pill').forEach(p => p.classList.remove('active'));
+  el.classList.add('active');
+}
+
+function getSelectedGpuUrl() {
+  const active = document.querySelector('#gpu-pill-group .gpu-pill.active');
+  return active ? active.dataset.url : (ollamaEndpoints[0]?.base_url || '');
+}
+
 function addModelFromGlobal(name) {
-  const select = document.getElementById('gpu-select-global');
-  const baseUrl = select.value;
+  const baseUrl = getSelectedGpuUrl();
   pipelineConfig.push({ name, base_url: baseUrl, label: name });
   renderPipeline();
 }

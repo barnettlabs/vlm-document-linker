@@ -24,6 +24,7 @@ import fitz  # pymupdf
 from PIL import Image
 from pathlib import Path
 import io
+import pytesseract
 
 # -- Config ------------------------------------------------------------------
 REDIS_HOST = os.environ.get("REDIS_HOST", "localhost")
@@ -118,6 +119,39 @@ def get_pipeline():
     return DEFAULT_PIPELINE
 
 
+# -- Image orientation -------------------------------------------------------
+def detect_rotation(img: Image.Image) -> int:
+    """Use Tesseract OSD to detect how many degrees the image is rotated.
+    Returns the angle to rotate BY to correct it (0, 90, 180, or 270)."""
+    try:
+        osd = pytesseract.image_to_osd(img)
+        for line in osd.splitlines():
+            if line.startswith("Rotate:"):
+                angle = int(line.split(":")[1].strip())
+                return angle
+    except Exception as e:
+        print(f"[{WORKER_ID}]   OSD detection failed, skipping rotation: {e}", flush=True)
+    return 0
+
+
+def auto_rotate(img: Image.Image) -> tuple[Image.Image, int]:
+    """Detect and correct image rotation. Returns (corrected_image, degrees_rotated).
+
+    Tesseract's 'Rotate:' reports how many degrees the text is currently rotated.
+    To correct it, we rotate by the negative (i.e. 360 - angle).
+    Pillow's rotate() goes counter-clockwise, so rotate(360 - angle) undoes it.
+    """
+    angle = detect_rotation(img)
+    if angle == 0:
+        return img, 0
+    correction = (360 - angle) % 360
+    if correction == 0:
+        return img, 0
+    rotated = img.rotate(correction, expand=True)
+    print(f"[{WORKER_ID}]   OSD detected {angle} deg, corrected by rotating {correction} deg", flush=True)
+    return rotated, correction
+
+
 # -- File handling -----------------------------------------------------------
 def get_page_count(path: Path) -> int:
     """Return the number of pages for a file (1 for images)."""
@@ -131,7 +165,8 @@ def get_page_count(path: Path) -> int:
 
 
 def file_to_base64(path: Path, page: int = 0) -> tuple[str, str]:
-    """Convert any supported file to base64 JPEG for vision model ingestion."""
+    """Convert any supported file to base64 JPEG for vision model ingestion.
+    Applies auto-rotation correction via Tesseract OSD."""
     suffix = path.suffix.lower()
 
     if suffix == ".pdf":
@@ -140,22 +175,20 @@ def file_to_base64(path: Path, page: int = 0) -> tuple[str, str]:
             raise ValueError(f"Page {page} does not exist (PDF has {len(doc)} pages)")
         mat = fitz.Matrix(150 / 72, 150 / 72)
         pix = doc[page].get_pixmap(matrix=mat)
-        data = pix.tobytes("jpeg")
+        img = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
         doc.close()
-        return base64.b64encode(data).decode(), "image/jpeg"
-
     elif suffix in {".jpg", ".jpeg"}:
-        with open(path, "rb") as f:
-            return base64.b64encode(f.read()).decode(), "image/jpeg"
-
+        img = Image.open(path).convert("RGB")
     elif suffix == ".png":
         img = Image.open(path).convert("RGB")
-        buf = io.BytesIO()
-        img.save(buf, format="JPEG", quality=85)
-        return base64.b64encode(buf.getvalue()).decode(), "image/jpeg"
-
     else:
         raise ValueError(f"Unsupported file type: {suffix}")
+
+    img, rotation = auto_rotate(img)
+
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=85)
+    return base64.b64encode(buf.getvalue()).decode(), "image/jpeg"
 
 
 # -- Model calling -----------------------------------------------------------

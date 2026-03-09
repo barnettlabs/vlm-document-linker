@@ -17,6 +17,7 @@ import time
 import openai
 import anthropic
 from PIL import Image
+import pytesseract
 
 app = Flask(__name__)
 
@@ -86,10 +87,93 @@ def test_page():
     return render_template("test.html")
 
 
+# -- Image orientation -------------------------------------------------------
+
+def auto_rotate(img: Image.Image) -> tuple[Image.Image, int]:
+    """Detect and correct image rotation via Tesseract OSD.
+
+    Tesseract's 'Rotate:' reports how many degrees the text is currently rotated.
+    To correct it, we rotate by (360 - angle) since Pillow rotates counter-clockwise.
+    """
+    try:
+        osd = pytesseract.image_to_osd(img)
+        for line in osd.splitlines():
+            if line.startswith("Rotate:"):
+                angle = int(line.split(":")[1].strip())
+                if angle != 0:
+                    correction = (360 - angle) % 360
+                    if correction != 0:
+                        return img.rotate(correction, expand=True), correction
+    except Exception:
+        pass
+    return img, 0
+
+
+# -- Prompt Presets ----------------------------------------------------------
+
+# Mirrors the prompts from workers/worker.py so the test page can use them
+PROMPT_PRESETS = {
+    "lead_paint": {
+        "label": "Lead Paint Certificate",
+        "prompt": """/nothink
+You are extracting a certificate number from a lead inspection certificate.
+
+Find the value of the field labeled "INSPECTION CERTIFICATE NO" in this document.
+This field should always be present on the document. It is typically a numeric or
+alphanumeric identifier.
+
+Rules:
+- Return the exact value shown in the field, do not modify or reformat it.
+- confidence should reflect how clearly you can read the value (0.0 to 1.0).
+- If you cannot find a field labeled "INSPECTION CERTIFICATE NO", set found to false
+  and leave certificate_number as null.
+
+Return ONLY valid JSON, no markdown, no explanation:
+{
+  "certificate_number": "the extracted value or null",
+  "found": true,
+  "confidence": 0.95
+}""",
+    },
+    "rental_license": {
+        "label": "Rental License",
+        "prompt": """/nothink
+You are extracting a license number from a rental license document.
+
+Look for the license number in this document. It may appear as:
+- A field labeled "Number" (typically in the top-right area of the document)
+- A field labeled "License #" (sometimes at the bottom of the document)
+
+The same license number may appear in multiple places. Extract the value you find.
+
+Rules:
+- Return the exact value shown in the field, do not modify or reformat it.
+- confidence should reflect how clearly you can read the value (0.0 to 1.0).
+- If you cannot find a license number, set found to false and leave certificate_number as null.
+
+Return ONLY valid JSON, no markdown, no explanation:
+{
+  "certificate_number": "the extracted value or null",
+  "found": true,
+  "confidence": 0.95
+}""",
+    },
+}
+
+
+@app.route("/api/prompts")
+def get_prompts():
+    """Return available prompt presets."""
+    return jsonify({
+        "presets": {k: {"label": v["label"], "prompt": v["prompt"]} for k, v in PROMPT_PRESETS.items()}
+    })
+
+
 # -- Test API ----------------------------------------------------------------
 
 def file_to_base64(file_path: str) -> tuple[str, str]:
-    """Convert a file to base64 JPEG for vision model ingestion."""
+    """Convert a file to base64 JPEG for vision model ingestion.
+    Applies auto-rotation correction via Tesseract OSD."""
     path = Path(file_path)
     suffix = path.suffix.lower()
 
@@ -97,18 +181,18 @@ def file_to_base64(file_path: str) -> tuple[str, str]:
         doc = fitz.open(str(path))
         mat = fitz.Matrix(150 / 72, 150 / 72)
         pix = doc[0].get_pixmap(matrix=mat)
-        data = pix.tobytes("jpeg")
-        return base64.b64encode(data).decode(), "image/jpeg"
-    elif suffix in {".jpg", ".jpeg"}:
-        with open(path, "rb") as f:
-            return base64.b64encode(f.read()).decode(), "image/jpeg"
-    elif suffix == ".png":
+        img = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
+        doc.close()
+    elif suffix in {".jpg", ".jpeg", ".png"}:
         img = Image.open(path).convert("RGB")
-        buf = io.BytesIO()
-        img.save(buf, format="JPEG", quality=85)
-        return base64.b64encode(buf.getvalue()).decode(), "image/jpeg"
     else:
         raise ValueError(f"Unsupported file type: {suffix}")
+
+    img, _ = auto_rotate(img)
+
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=85)
+    return base64.b64encode(buf.getvalue()).decode(), "image/jpeg"
 
 
 @app.route("/api/test/files")
@@ -445,18 +529,19 @@ def serve_file_image():
             abort(404)
         mat = fitz.Matrix(200 / 72, 200 / 72)  # 200 DPI for review
         pix = doc[page].get_pixmap(matrix=mat)
-        img_bytes = pix.tobytes("jpeg")
+        img = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
         doc.close()
-        return send_file(io.BytesIO(img_bytes), mimetype="image/jpeg")
-
-    elif suffix in {".jpg", ".jpeg"}:
-        return send_file(path, mimetype="image/jpeg")
-
-    elif suffix == ".png":
-        return send_file(path, mimetype="image/png")
-
+    elif suffix in {".jpg", ".jpeg", ".png"}:
+        img = Image.open(path).convert("RGB")
     else:
         abort(415)
+
+    img, _ = auto_rotate(img)
+
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=85)
+    buf.seek(0)
+    return send_file(buf, mimetype="image/jpeg")
 
 
 @app.route("/api/file-detail")

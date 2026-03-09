@@ -24,6 +24,7 @@ app = Flask(__name__)
 REDIS_HOST = os.environ.get("REDIS_HOST", "localhost")
 INPUT_DIR = os.environ.get("INPUT_DIR", "/input")
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
 OLLAMA_ENDPOINTS = [
     url.strip() for url in
     os.environ.get("OLLAMA_ENDPOINTS", "").split(",") if url.strip()
@@ -34,6 +35,12 @@ CLAUDE_PRICING = {
     "claude-sonnet-4-20250514": {"input": 3.00, "output": 15.00},
     "claude-haiku-4-5-20251001": {"input": 0.80, "output": 4.00},
     "claude-opus-4-20250514": {"input": 15.00, "output": 75.00},
+}
+
+# Groq pricing per million tokens
+GROQ_PRICING = {
+    "meta-llama/llama-4-scout-17b-16e-instruct": {"input": 0.11, "output": 0.34},
+    "meta-llama/llama-4-maverick-17b-128e-instruct": {"input": 0.50, "output": 0.77},
 }
 
 r = redis.Redis(host=REDIS_HOST, port=6379, decode_responses=True)
@@ -52,6 +59,7 @@ KNOWN_KEYS = [
     "queue:pending",
     "files",
     "failures",
+    "processing",
     "config:pipeline",
 ]
 
@@ -171,8 +179,8 @@ def get_prompts():
 
 # -- Test API ----------------------------------------------------------------
 
-def file_to_base64(file_path: str) -> tuple[str, str]:
-    """Convert a file to base64 JPEG for vision model ingestion.
+def file_to_base64(file_path: str, page: int = 0) -> tuple[str, str]:
+    """Convert a single page of a file to base64 JPEG for vision model ingestion.
     Applies auto-rotation correction via Tesseract OSD."""
     path = Path(file_path)
     suffix = path.suffix.lower()
@@ -180,7 +188,7 @@ def file_to_base64(file_path: str) -> tuple[str, str]:
     if suffix == ".pdf":
         doc = fitz.open(str(path))
         mat = fitz.Matrix(150 / 72, 150 / 72)
-        pix = doc[0].get_pixmap(matrix=mat)
+        pix = doc[page].get_pixmap(matrix=mat)
         img = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
         doc.close()
     elif suffix in {".jpg", ".jpeg", ".png"}:
@@ -193,6 +201,28 @@ def file_to_base64(file_path: str) -> tuple[str, str]:
     buf = io.BytesIO()
     img.save(buf, format="JPEG", quality=85)
     return base64.b64encode(buf.getvalue()).decode(), "image/jpeg"
+
+
+def file_all_pages_to_base64(file_path: str) -> list[tuple[str, str]]:
+    """Convert all pages of a file to a list of (base64_data, media_type) tuples."""
+    path = Path(file_path)
+    suffix = path.suffix.lower()
+
+    if suffix == ".pdf":
+        doc = fitz.open(str(path))
+        pages = []
+        mat = fitz.Matrix(150 / 72, 150 / 72)
+        for i in range(len(doc)):
+            pix = doc[i].get_pixmap(matrix=mat)
+            img = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
+            img, _ = auto_rotate(img)
+            buf = io.BytesIO()
+            img.save(buf, format="JPEG", quality=85)
+            pages.append((base64.b64encode(buf.getvalue()).decode(), "image/jpeg"))
+        doc.close()
+        return pages
+    else:
+        return [file_to_base64(file_path, page=0)]
 
 
 @app.route("/api/test/files")
@@ -208,12 +238,17 @@ def test_list_files():
 
 @app.route("/api/test/run", methods=["POST"])
 def test_run_model():
-    """Run a single model against a file and return the raw response."""
+    """Run a single model against a file and return the raw response.
+
+    Accepts optional 'page' param: integer for a specific page, or "all" to
+    send every page as separate images in one request. Defaults to 0.
+    """
     file_path = request.json.get("file")
     model_name = request.json.get("model")
     base_url = request.json.get("base_url")
     provider = request.json.get("provider", "ollama")
     prompt = request.json.get("prompt", "OCR this document")
+    page_param = request.json.get("page", 0)
 
     if not file_path or not model_name:
         return jsonify({"error": "file and model required"}), 400
@@ -231,34 +266,42 @@ def test_run_model():
         return jsonify({"error": "File must be within input directory"}), 403
 
     try:
-        image_data, media_type = file_to_base64(file_path)
+        if page_param == "all":
+            images = file_all_pages_to_base64(file_path)
+        else:
+            images = [file_to_base64(file_path, page=int(page_param))]
 
         if provider == "claude":
-            return _run_claude(model_name, image_data, media_type, prompt)
+            return _run_claude(model_name, images, prompt)
+        elif provider == "groq":
+            return _run_groq(model_name, images, prompt)
         else:
-            return _run_ollama(model_name, base_url, image_data, media_type, prompt)
+            return _run_ollama(model_name, base_url, images, prompt)
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 
-def _run_ollama(model_name, base_url, image_data, media_type, prompt):
+def _build_openai_content(images, prompt):
+    """Build OpenAI-compatible content array with one or more images + text."""
+    content = []
+    for image_data, media_type in images:
+        content.append({
+            "type": "image_url",
+            "image_url": {"url": f"data:{media_type};base64,{image_data}"},
+        })
+    content.append({"type": "text", "text": prompt})
+    return content
+
+
+def _run_ollama(model_name, base_url, images, prompt):
     client = openai.OpenAI(base_url=base_url, api_key="not-needed")
     t0 = time.time()
     response = client.chat.completions.create(
         model=model_name,
         max_tokens=2048,
         temperature=0.0,
-        messages=[{
-            "role": "user",
-            "content": [
-                {
-                    "type": "image_url",
-                    "image_url": {"url": f"data:{media_type};base64,{image_data}"},
-                },
-                {"type": "text", "text": prompt},
-            ],
-        }],
+        messages=[{"role": "user", "content": _build_openai_content(images, prompt)}],
     )
     elapsed = round(time.time() - t0, 2)
 
@@ -274,32 +317,32 @@ def _run_ollama(model_name, base_url, image_data, media_type, prompt):
         "elapsed_seconds": elapsed,
         "prompt_tokens": prompt_tokens,
         "completion_tokens": completion_tokens,
+        "pages_sent": len(images),
     })
 
 
-def _run_claude(model_name, image_data, media_type, prompt):
+def _run_claude(model_name, images, prompt):
     if not ANTHROPIC_API_KEY:
         return jsonify({"error": "ANTHROPIC_API_KEY not configured"}), 400
+
+    content = []
+    for image_data, media_type in images:
+        content.append({
+            "type": "image",
+            "source": {
+                "type": "base64",
+                "media_type": media_type,
+                "data": image_data,
+            },
+        })
+    content.append({"type": "text", "text": prompt})
 
     client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
     t0 = time.time()
     response = client.messages.create(
         model=model_name,
         max_tokens=2048,
-        messages=[{
-            "role": "user",
-            "content": [
-                {
-                    "type": "image",
-                    "source": {
-                        "type": "base64",
-                        "media_type": media_type,
-                        "data": image_data,
-                    },
-                },
-                {"type": "text", "text": prompt},
-            ],
-        }],
+        messages=[{"role": "user", "content": content}],
     )
     elapsed = round(time.time() - t0, 2)
 
@@ -320,6 +363,50 @@ def _run_claude(model_name, image_data, media_type, prompt):
         "elapsed_seconds": elapsed,
         "prompt_tokens": prompt_tokens,
         "completion_tokens": completion_tokens,
+        "pages_sent": len(images),
+        "cost": {
+            "input_cost": round(input_cost, 6),
+            "output_cost": round(output_cost, 6),
+            "total_cost": round(total_cost, 6),
+            "input_rate": pricing["input"],
+            "output_rate": pricing["output"],
+        },
+    })
+
+
+def _run_groq(model_name, images, prompt):
+    if not GROQ_API_KEY:
+        return jsonify({"error": "GROQ_API_KEY not configured"}), 400
+
+    client = openai.OpenAI(base_url="https://api.groq.com/openai/v1", api_key=GROQ_API_KEY)
+    t0 = time.time()
+    response = client.chat.completions.create(
+        model=model_name,
+        max_tokens=2048,
+        temperature=0.0,
+        messages=[{"role": "user", "content": _build_openai_content(images, prompt)}],
+    )
+    elapsed = round(time.time() - t0, 2)
+
+    usage = getattr(response, "usage", None)
+    raw_content = response.choices[0].message.content or ""
+    prompt_tokens = getattr(usage, "prompt_tokens", 0) or 0
+    completion_tokens = getattr(usage, "completion_tokens", 0) or 0
+
+    # Calculate cost
+    pricing = GROQ_PRICING.get(model_name, {"input": 0, "output": 0})
+    input_cost = (prompt_tokens / 1_000_000) * pricing["input"]
+    output_cost = (completion_tokens / 1_000_000) * pricing["output"]
+    total_cost = input_cost + output_cost
+
+    return jsonify({
+        "raw_response": raw_content,
+        "provider": "groq",
+        "model": model_name,
+        "elapsed_seconds": elapsed,
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": completion_tokens,
+        "pages_sent": len(images),
         "cost": {
             "input_cost": round(input_cost, 6),
             "output_cost": round(output_cost, 6),
@@ -344,6 +431,8 @@ HOSTED_PRICING = {
     "Claude Opus 4": {"input": 15.00, "output": 75.00},
     "Gemini 2.5 Flash": {"input": 0.15, "output": 0.60},
     "Gemini 2.5 Pro": {"input": 1.25, "output": 10.00},
+    "Groq Llama 4 Scout": {"input": 0.11, "output": 0.34},
+    "Groq Llama 4 Maverick": {"input": 0.50, "output": 0.77},
 }
 
 

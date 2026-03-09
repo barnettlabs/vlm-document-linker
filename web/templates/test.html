@@ -363,6 +363,10 @@
       <div class="config-section">
         <label>Document</label>
         <select id="fileSelect"><option value="">-- Select a file --</option></select>
+        <div id="pageGroup" style="display:none;margin-top:10px;">
+          <label>Page</label>
+          <div class="pill-group" id="pagePills"></div>
+        </div>
       </div>
 
       <!-- Provider + GPU -->
@@ -372,6 +376,7 @@
           <div class="pill-group" id="providerGroup">
             <button class="pill active" data-value="ollama" onclick="selectPill(this, 'providerGroup'); onProviderChange()">Ollama (Local)</button>
             <button class="pill" data-value="claude" onclick="selectPill(this, 'providerGroup'); onProviderChange()">Claude API</button>
+            <button class="pill" data-value="groq" onclick="selectPill(this, 'providerGroup'); onProviderChange()">Groq API</button>
           </div>
           <div id="gpuGroup" style="display:flex;align-items:center;gap:8px;">
             <span style="font-size:11px;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.5px;">GPU:</span>
@@ -436,11 +441,17 @@ let allModels = [];
 let promptPresets = {};
 let customPromptText = 'OCR this document';
 let selectedModel = '';
+let fileTotalPages = 1;
 
 const CLAUDE_MODELS = [
   { name: 'claude-sonnet-4-20250514', family: 'Claude', tag: 'Sonnet 4', price: '$3/$15 per M' },
   { name: 'claude-haiku-4-5-20251001', family: 'Claude', tag: 'Haiku 4.5', price: '$0.80/$4 per M' },
   { name: 'claude-opus-4-20250514', family: 'Claude', tag: 'Opus 4', price: '$15/$75 per M' },
+];
+
+const GROQ_MODELS = [
+  { name: 'meta-llama/llama-4-scout-17b-16e-instruct', family: 'Llama 4', tag: 'Scout 17B', price: '$0.11/$0.34 per M' },
+  { name: 'meta-llama/llama-4-maverick-17b-128e-instruct', family: 'Llama 4', tag: 'Maverick 17B', price: '$0.50/$0.77 per M' },
 ];
 
 async function init() {
@@ -569,6 +580,21 @@ function renderClaudeModels() {
   </div>`;
 }
 
+function renderGroqModels() {
+  const area = document.getElementById('modelArea');
+
+  area.innerHTML = `<div class="model-family-card">
+    <div class="model-family-name">Llama 4 (Groq)</div>
+    <div class="model-variants">
+      ${GROQ_MODELS.map(m =>
+        `<button class="model-chip" data-value="${m.name}" onclick="selectModel(this)">
+          ${m.tag}<span class="chip-size">${m.price}</span>
+        </button>`
+      ).join('')}
+    </div>
+  </div>`;
+}
+
 function onProviderChange() {
   const provider = getActivePillValue('providerGroup');
   const gpuGroup = document.getElementById('gpuGroup');
@@ -578,6 +604,9 @@ function onProviderChange() {
   if (provider === 'claude') {
     gpuGroup.style.display = 'none';
     renderClaudeModels();
+  } else if (provider === 'groq') {
+    gpuGroup.style.display = 'none';
+    renderGroqModels();
   } else {
     gpuGroup.style.display = 'flex';
     renderOllamaModels();
@@ -615,30 +644,45 @@ function selectPromptPreset(el, key) {
 async function onFileChange() {
   const fileSelect = document.getElementById('fileSelect');
   const preview = document.getElementById('previewArea');
+  const pageGroup = document.getElementById('pageGroup');
 
   if (!fileSelect.value) {
     preview.innerHTML = '<span class="empty-msg">Select a file above</span>';
+    pageGroup.style.display = 'none';
+    fileTotalPages = 1;
     updateState();
     return;
   }
 
   preview.innerHTML = '<span class="empty-msg">Loading...</span>';
 
-  let totalPages = 1;
+  fileTotalPages = 1;
   try {
     const resp = await fetch('/api/file-info?path=' + encodeURIComponent(fileSelect.value));
     if (resp.ok) {
       const info = await resp.json();
-      totalPages = info.pages || 1;
+      fileTotalPages = info.pages || 1;
     }
   } catch (e) {
     console.error('File info error:', e);
   }
 
+  // Build page pills for multi-page files
+  if (fileTotalPages > 1) {
+    let pills = `<button class="pill active" data-value="all" onclick="selectPill(this, 'pagePills')">All Pages</button>`;
+    for (let i = 0; i < fileTotalPages; i++) {
+      pills += `<button class="pill" data-value="${i}" onclick="selectPill(this, 'pagePills')">Page ${i + 1}</button>`;
+    }
+    document.getElementById('pagePills').innerHTML = pills;
+    pageGroup.style.display = '';
+  } else {
+    pageGroup.style.display = 'none';
+  }
+
   let html = '';
-  for (let i = 0; i < totalPages; i++) {
-    if (totalPages > 1) {
-      html += `<div class="page-label">Page ${i + 1} of ${totalPages}</div>`;
+  for (let i = 0; i < fileTotalPages; i++) {
+    if (fileTotalPages > 1) {
+      html += `<div class="page-label">Page ${i + 1} of ${fileTotalPages}</div>`;
     }
     html += `<img src="/api/file-image?path=${encodeURIComponent(fileSelect.value)}&page=${i}" alt="Page ${i + 1}">`;
   }
@@ -666,9 +710,16 @@ function updateState() {
     ? `<span class="sel-tag sel-set">${label}</span>`
     : `<span class="sel-tag sel-unset">${label}</span>`;
 
+  let pageLabel = '';
+  if (file && fileTotalPages > 1) {
+    const pageVal = getActivePillValue('pagePills');
+    pageLabel = pageVal === 'all' ? `All ${fileTotalPages} pages` : `Page ${parseInt(pageVal, 10) + 1}`;
+  }
+
   summary.innerHTML = [
     tag(file, file ? fileName : 'No file'),
-    tag(provider, provider === 'claude' ? 'Claude' : 'Ollama'),
+    fileTotalPages > 1 ? tag(true, pageLabel) : '',
+    tag(provider, provider === 'claude' ? 'Claude' : provider === 'groq' ? 'Groq' : 'Ollama'),
     needsGpu ? tag(gpu, gpu ? endpoints.find(e => e.base_url === gpu)?.label || 'GPU' : 'No GPU') : '',
     tag(model, model || 'No model'),
   ].filter(Boolean).join('');
@@ -687,6 +738,13 @@ async function runTest() {
   const costRow = document.getElementById('costRow');
   const runBtn = document.getElementById('runBtn');
 
+  // Determine which page(s) to send
+  let page = 0;
+  if (fileTotalPages > 1) {
+    const pageVal = getActivePillValue('pagePills');
+    page = pageVal === 'all' ? 'all' : parseInt(pageVal, 10);
+  }
+
   runBtn.disabled = true;
   runBtn.innerHTML = '<span class="spinner"></span>Running...';
   responseArea.textContent = 'Waiting for response...';
@@ -694,7 +752,7 @@ async function runTest() {
   costRow.style.display = 'none';
 
   try {
-    const body = { file, model, provider, prompt };
+    const body = { file, model, provider, prompt, page };
     if (provider === 'ollama') body.base_url = baseUrl;
 
     const resp = await fetch('/api/test/run', {
@@ -709,7 +767,8 @@ async function runTest() {
       responseArea.textContent = 'ERROR: ' + data.error;
     } else {
       responseArea.textContent = data.raw_response;
-      document.getElementById('metaTime').textContent = data.elapsed_seconds + 's';
+      const pagesLabel = data.pages_sent > 1 ? ` (${data.pages_sent} pages)` : '';
+      document.getElementById('metaTime').textContent = data.elapsed_seconds + 's' + pagesLabel;
       document.getElementById('metaPrompt').textContent = data.prompt_tokens.toLocaleString();
       document.getElementById('metaCompletion').textContent = data.completion_tokens.toLocaleString();
       metaRow.style.display = 'flex';

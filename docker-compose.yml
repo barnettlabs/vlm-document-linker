@@ -179,6 +179,8 @@ services:
       - WORKER_ID=pipeline
       - OUTPUT_DIR=/output
       - AUTO_ACCEPT_THRESHOLD=0.85
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - GROQ_API_KEY=${GROQ_API_KEY:-}
     volumes:
       - ./input:/input:ro
       - ./output:/output
@@ -223,6 +225,7 @@ services:
       - INPUT_DIR=/input
       - OLLAMA_ENDPOINTS=http://ollama-gpu0:11434,http://ollama-gpu1:11434,http://ollama-multi:11434
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - GROQ_API_KEY=${GROQ_API_KEY:-}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ./input:/input:ro

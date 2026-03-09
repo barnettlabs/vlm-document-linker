@@ -600,7 +600,12 @@
     <div class="panel" id="costPanel" style="display:none;">
       <div class="panel-header">
         <h2>Estimated Hosted API Costs</h2>
-        <span style="font-size:12px;color:var(--text-dim);">What this workload would cost on hosted vision LLMs</span>
+        <div style="display:flex;align-items:center;gap:10px;">
+          <span style="font-size:12px;color:var(--text-dim);">Projected docs:</span>
+          <input type="number" id="projectedDocs" min="0" step="1" value="" placeholder="e.g. 10000"
+            style="width:110px;padding:5px 8px;border-radius:6px;border:1px solid var(--border);background:var(--surface2);color:var(--text);font-size:13px;font-family:inherit;"
+            oninput="renderCostEstimates()">
+        </div>
       </div>
       <div class="panel-body" style="max-height:none;">
         <table class="results-table" id="costTable">
@@ -611,6 +616,9 @@
             <th>Input Cost</th>
             <th>Output Cost</th>
             <th>Total Cost</th>
+            <th id="projInputHeader" style="display:none;">Proj. Input</th>
+            <th id="projOutputHeader" style="display:none;">Proj. Output</th>
+            <th id="projTotalHeader" style="display:none;">Proj. Total</th>
           </tr></thead>
           <tbody id="costBody"></tbody>
         </table>
@@ -713,6 +721,17 @@ let pipelineConfig = [];
 let availableModels = [];
 let ollamaEndpoints = [];
 
+const CLAUDE_PIPELINE_MODELS = [
+  { name: 'claude-sonnet-4-20250514', label: 'Claude Sonnet 4', price: '$3/$15 per M' },
+  { name: 'claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5', price: '$0.80/$4 per M' },
+  { name: 'claude-opus-4-20250514', label: 'Claude Opus 4', price: '$15/$75 per M' },
+];
+
+const GROQ_PIPELINE_MODELS = [
+  { name: 'meta-llama/llama-4-scout-17b-16e-instruct', label: 'Llama 4 Scout 17B', price: '$0.11/$0.34 per M' },
+  { name: 'meta-llama/llama-4-maverick-17b-128e-instruct', label: 'Llama 4 Maverick 17B', price: '$0.50/$0.77 per M' },
+];
+
 async function refresh() {
   try {
     const resp = await fetch('/api/status');
@@ -799,8 +818,34 @@ function renderCostEstimates() {
   }
 
   panel.style.display = '';
+
+  const projInput = document.getElementById('projectedDocs');
+  const projDocs = parseInt(projInput.value, 10);
+  const hasProj = projDocs > 0;
+
+  // Average tokens per file from current workload
+  const avgPrompt = data.token_totals?.avg_prompt_per_file || 0;
+  const avgCompletion = data.token_totals?.avg_completion_per_file || 0;
+
+  // Show/hide projected columns
+  ['projInputHeader', 'projOutputHeader', 'projTotalHeader'].forEach(id => {
+    document.getElementById(id).style.display = hasProj ? '' : 'none';
+  });
+
   body.innerHTML = estimates.map(e => {
     const fmt = v => v < 0.01 ? '$' + v.toFixed(4) : '$' + v.toFixed(2);
+
+    let projCells = '';
+    if (hasProj) {
+      const projInputCost = (avgPrompt * projDocs / 1_000_000) * e.input_rate;
+      const projOutputCost = (avgCompletion * projDocs / 1_000_000) * e.output_rate;
+      const projTotalCost = projInputCost + projOutputCost;
+      projCells = `
+        <td class="mono" style="font-size:12px;color:var(--cyan)">${fmt(projInputCost)}</td>
+        <td class="mono" style="font-size:12px;color:var(--orange)">${fmt(projOutputCost)}</td>
+        <td class="mono" style="font-size:12px;font-weight:600;">${fmt(projTotalCost)}</td>`;
+    }
+
     return `<tr>
       <td style="font-weight:600;">${e.provider}</td>
       <td class="mono" style="font-size:12px;color:var(--text-dim)">$${e.input_rate}/M</td>
@@ -808,6 +853,7 @@ function renderCostEstimates() {
       <td class="mono" style="font-size:12px;color:var(--cyan)">${fmt(e.input_cost)}</td>
       <td class="mono" style="font-size:12px;color:var(--orange)">${fmt(e.output_cost)}</td>
       <td class="mono" style="font-size:12px;font-weight:600;">${fmt(e.total_cost)}</td>
+      ${projCells}
     </tr>`;
   }).join('');
 }
@@ -931,27 +977,35 @@ function renderPipeline() {
   html += '<div class="pipeline-section-label">Active Pipeline</div>';
 
   if (pipelineConfig.length > 0) {
-    html += pipelineConfig.map((m, i) => `
+    html += pipelineConfig.map((m, i) => {
+      const provider = m.provider || 'ollama';
+      const subtitle = provider === 'ollama' ? m.base_url
+        : provider === 'claude' ? 'Anthropic API'
+        : provider === 'groq' ? 'Groq API'
+        : m.base_url;
+      return `
       <div class="pipeline-card">
         <div class="pipeline-order">${i + 1}</div>
         <div class="pipeline-info">
           <div class="pipeline-name">${m.label || m.name}</div>
-          <div class="pipeline-url">${m.base_url}</div>
+          <div class="pipeline-url">${subtitle}</div>
         </div>
         <div class="pipeline-actions">
           <button class="btn" onclick="movePipelineModel(${i}, -1)" ${i === 0 ? 'disabled' : ''} title="Move up">&#x25B2;</button>
           <button class="btn" onclick="movePipelineModel(${i}, 1)" ${i === pipelineConfig.length - 1 ? 'disabled' : ''} title="Move down">&#x25BC;</button>
           <button class="btn btn-danger" onclick="removePipelineModel(${i})" title="Remove">&#x2715;</button>
         </div>
-      </div>
-    `).join('');
+      </div>`;
+    }).join('');
   } else {
     html += '<div class="pipeline-empty">No models in pipeline — add one below</div>';
   }
 
   // Available models
   html += '<div class="pipeline-divider"></div>';
-  html += '<div class="pipeline-section-label">Available Models</div>';
+  html += '<div class="pipeline-section-label">Available Ollama Models</div>';
+
+  const pipelineNames = new Set(pipelineConfig.map(m => m.name));
 
   if (availableModels.length > 0) {
     // GPU service pill selector
@@ -964,7 +1018,6 @@ function renderPipeline() {
     </div>`;
 
     // Filter out models already in pipeline
-    const pipelineNames = new Set(pipelineConfig.map(m => m.name));
     const available = availableModels.filter(m => !pipelineNames.has(m.name));
 
     if (available.length > 0) {
@@ -1007,6 +1060,38 @@ function renderPipeline() {
     html += '<div class="pipeline-empty">No Ollama models found — is Ollama running?</div>';
   }
 
+  // Claude models
+  html += '<div class="pipeline-divider"></div>';
+  html += '<div class="pipeline-section-label">Claude Models</div>';
+  const claudeAvailable = CLAUDE_PIPELINE_MODELS.filter(m => !pipelineNames.has(m.name));
+  if (claudeAvailable.length > 0) {
+    html += '<div class="model-family"><div class="model-family-header"><div class="model-family-name">Claude</div></div>';
+    html += '<div class="model-family-variants">';
+    html += claudeAvailable.map(m => `<div class="available-model-card" onclick="addCloudModel('${m.name}', '${m.label}', 'claude')">
+      <span class="model-tag">${m.label}</span>
+      <span class="model-size">${m.price}</span>
+    </div>`).join('');
+    html += '</div></div>';
+  } else {
+    html += '<div class="pipeline-empty">All Claude models are in the pipeline</div>';
+  }
+
+  // Groq models
+  html += '<div class="pipeline-divider"></div>';
+  html += '<div class="pipeline-section-label">Groq Models</div>';
+  const groqAvailable = GROQ_PIPELINE_MODELS.filter(m => !pipelineNames.has(m.name));
+  if (groqAvailable.length > 0) {
+    html += '<div class="model-family"><div class="model-family-header"><div class="model-family-name">Llama 4 (Groq)</div></div>';
+    html += '<div class="model-family-variants">';
+    html += groqAvailable.map(m => `<div class="available-model-card" onclick="addCloudModel('${m.name}', '${m.label}', 'groq')">
+      <span class="model-tag">${m.label}</span>
+      <span class="model-size">${m.price}</span>
+    </div>`).join('');
+    html += '</div></div>';
+  } else {
+    html += '<div class="pipeline-empty">All Groq models are in the pipeline</div>';
+  }
+
   body.innerHTML = html;
 }
 
@@ -1035,6 +1120,12 @@ function getSelectedGpuUrl() {
 function addModelFromGlobal(name) {
   const baseUrl = getSelectedGpuUrl();
   pipelineConfig.push({ name, base_url: baseUrl, label: name });
+  renderPipeline();
+}
+
+function addCloudModel(name, label, provider) {
+  const baseUrl = provider === 'groq' ? 'https://api.groq.com/openai/v1' : '';
+  pipelineConfig.push({ name, base_url: baseUrl, label, provider });
   renderPipeline();
 }
 

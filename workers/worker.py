@@ -20,6 +20,7 @@ import time
 from datetime import datetime, timezone
 import redis
 import openai
+import anthropic
 import fitz  # pymupdf
 from PIL import Image
 from pathlib import Path
@@ -33,6 +34,8 @@ WORKER_ID = os.environ.get("WORKER_ID", "worker")
 OUTPUT_DIR = Path(os.environ.get("OUTPUT_DIR", "/output"))
 MAX_RETRIES = 3
 AUTO_ACCEPT_THRESHOLD = float(os.environ.get("AUTO_ACCEPT_THRESHOLD", "0.85"))
+ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
 
 PROMPTS = {
     "lead_paint": """/nothink
@@ -192,43 +195,81 @@ def file_to_base64(path: Path, page: int = 0) -> tuple[str, str]:
 
 
 # -- Model calling -----------------------------------------------------------
-def call_model(path: Path, model_config: dict, page: int = 0, prompt: str = None) -> dict:
-    """Send image to a model endpoint and parse the JSON result."""
-    if prompt is None:
-        prompt = get_prompt(detect_doc_type(path))
-    client = openai.OpenAI(base_url=model_config["base_url"], api_key="not-needed")
-    image_data, media_type = file_to_base64(path, page=page)
-
+def _call_openai_compat(image_data: str, media_type: str, model_config: dict,
+                        prompt: str, api_key: str = "not-needed") -> tuple[str, int, int, float]:
+    """Call an OpenAI-compatible vision endpoint. Returns (raw_text, prompt_tokens, completion_tokens, elapsed)."""
+    client = openai.OpenAI(base_url=model_config["base_url"], api_key=api_key)
     t0 = time.time()
     response = client.chat.completions.create(
         model=model_config["name"],
         max_tokens=2048,
         temperature=0.0,
-        messages=[
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": f"data:{media_type};base64,{image_data}"
-                        },
-                    },
-                    {"type": "text", "text": prompt},
-                ],
-            }
-        ],
+        messages=[{
+            "role": "user",
+            "content": [
+                {
+                    "type": "image_url",
+                    "image_url": {"url": f"data:{media_type};base64,{image_data}"},
+                },
+                {"type": "text", "text": prompt},
+            ],
+        }],
     )
     elapsed = round(time.time() - t0, 2)
-
     raw = response.choices[0].message.content or ""
-    raw = raw.strip()
-    print(f"[{WORKER_ID}]   Raw response: {raw[:500]}", flush=True)
-
-    # Capture token usage
     usage = getattr(response, "usage", None)
     prompt_tokens = getattr(usage, "prompt_tokens", 0) or 0
     completion_tokens = getattr(usage, "completion_tokens", 0) or 0
+    return raw.strip(), prompt_tokens, completion_tokens, elapsed
+
+
+def _call_claude(image_data: str, media_type: str, model_config: dict,
+                 prompt: str) -> tuple[str, int, int, float]:
+    """Call Anthropic Claude vision API. Returns (raw_text, prompt_tokens, completion_tokens, elapsed)."""
+    client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+    t0 = time.time()
+    response = client.messages.create(
+        model=model_config["name"],
+        max_tokens=2048,
+        messages=[{
+            "role": "user",
+            "content": [
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": media_type,
+                        "data": image_data,
+                    },
+                },
+                {"type": "text", "text": prompt},
+            ],
+        }],
+    )
+    elapsed = round(time.time() - t0, 2)
+    raw = response.content[0].text if response.content else ""
+    return raw.strip(), response.usage.input_tokens, response.usage.output_tokens, elapsed
+
+
+def call_model(path: Path, model_config: dict, page: int = 0, prompt: str = None) -> dict:
+    """Send image to a model endpoint and parse the JSON result."""
+    if prompt is None:
+        prompt = get_prompt(detect_doc_type(path))
+    image_data, media_type = file_to_base64(path, page=page)
+
+    provider = model_config.get("provider", "ollama")
+
+    if provider == "claude":
+        raw, prompt_tokens, completion_tokens, elapsed = _call_claude(
+            image_data, media_type, model_config, prompt)
+    elif provider == "groq":
+        raw, prompt_tokens, completion_tokens, elapsed = _call_openai_compat(
+            image_data, media_type, model_config, prompt, api_key=GROQ_API_KEY)
+    else:
+        raw, prompt_tokens, completion_tokens, elapsed = _call_openai_compat(
+            image_data, media_type, model_config, prompt)
+
+    print(f"[{WORKER_ID}]   Raw response: {raw[:500]}", flush=True)
 
     # Strip <think>...</think> reasoning blocks (Qwen 3.5 thinking mode)
     raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()

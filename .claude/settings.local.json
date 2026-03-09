@@ -3,7 +3,11 @@
     "allow": [
       "WebSearch",
       "Bash(make help:*)",
-      "Bash(ls:*)"
+      "Bash(ls:*)",
+      "Bash(docker compose:*)",
+      "Bash(wc:*)",
+      "Bash(python:*)",
+      "Bash(python3:*)"
     ]
   }
 }

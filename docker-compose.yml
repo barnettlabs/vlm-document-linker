@@ -5,7 +5,8 @@
 #   Start dashboard:    docker compose up -d web
 #   Start models:       docker compose --profile models up -d
 #   Start worker:       docker compose --profile worker up -d
-#   Enqueue files:      docker compose --profile workers run enqueuer
+#   Enqueue files:      docker compose --profile jobs run enqueuer
+#   Export CSV:         docker compose --profile jobs run exporter
 #   Full stack:         docker compose --profile models --profile worker up -d
 #
 # GPU index reference:
@@ -148,7 +149,7 @@ services:
       context: ./workers
       dockerfile: Dockerfile
     container_name: vdl-enqueuer
-    profiles: ["workers"]
+    profiles: ["jobs"]
     command: python enqueue.py
     environment:
       - REDIS_HOST=redis
@@ -194,7 +195,7 @@ services:
       context: ./workers
       dockerfile: Dockerfile
     container_name: vdl-exporter
-    profiles: ["export"]
+    profiles: ["jobs"]
     command: python export.py
     environment:
       - REDIS_HOST=redis

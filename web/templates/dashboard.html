@@ -624,7 +624,7 @@
             <th>Passes</th>
             <th>Time</th>
             <th>Confidence</th>
-            <th>Tokens</th>
+            <th>Tokens (in/out/total)</th>
             <th>Actions</th>
           </tr></thead>
           <tbody id="filesBody"></tbody>
@@ -708,6 +708,7 @@ function renderStats() {
     { label: 'Needs Review', value: data.needs_review, cls: data.needs_review > 0 ? 'yellow' : 'green', sub: data.needs_review > 0 ? 'Click Review Queue' : 'All clear' },
     { label: 'Reviewed', value: data.reviewed, cls: 'blue', sub: 'Manually verified' },
     { label: 'Errors', value: data.errored, cls: data.errored > 0 ? 'red' : 'green', sub: data.errored > 0 ? 'Check below' : 'None' },
+    { label: 'Total Tokens', value: (data.token_totals?.total_tokens || 0).toLocaleString(), cls: 'purple', sub: `~${(data.token_totals?.avg_tokens_per_file || 0).toLocaleString()} avg/file` },
   ];
 
   document.getElementById('statsGrid').innerHTML = cards.map(c => `
@@ -826,10 +827,13 @@ function renderFiles() {
         const avg = confs.reduce((a, b) => a + b, 0) / confs.length;
         return avg.toFixed(2);
       })()}</td>
-      <td class="mono" style="font-size:12px">${(() => {
+      <td class="mono" style="font-size:11px;white-space:nowrap;">${(() => {
         const passes = f.passes || [];
-        const total = passes.reduce((sum, p) => sum + (p.completion_tokens || 0), 0);
-        return total > 0 ? total.toLocaleString() : '-';
+        const pt = passes.reduce((sum, p) => sum + (p.prompt_tokens || 0), 0);
+        const ct = passes.reduce((sum, p) => sum + (p.completion_tokens || 0), 0);
+        const tt = pt + ct;
+        if (tt === 0) return '-';
+        return `<span style="color:var(--text-dim)">${pt.toLocaleString()}</span> / <span style="color:var(--cyan)">${ct.toLocaleString()}</span> / <span style="color:var(--text)">${tt.toLocaleString()}</span>`;
       })()}</td>
       <td>
         <button class="btn btn-sm" onclick="requeueFile('${path}')">Re-run</button>

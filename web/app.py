@@ -305,6 +305,12 @@ def api_status():
         stats["avg_time"] = round(sum(times) / len(times), 2) if times else 0
         stats["avg_confidence"] = round(sum(confidences) / len(confidences), 2) if confidences else 0
 
+    # Grand total token counts across all models
+    grand_prompt_tokens = sum(s["total_prompt_tokens"] for s in model_stats.values())
+    grand_completion_tokens = sum(s["total_completion_tokens"] for s in model_stats.values())
+    grand_total_tokens = sum(s["total_tokens"] for s in model_stats.values())
+    files_with_passes = sum(1 for f in files if f.get("passes"))
+
     return jsonify({
         "queue_pending": queue_pending,
         "queue_items": queue_items,
@@ -316,6 +322,12 @@ def api_status():
         "reviewed": len(reviewed),
         "errored": len(errored),
         "model_stats": model_stats,
+        "token_totals": {
+            "prompt_tokens": grand_prompt_tokens,
+            "completion_tokens": grand_completion_tokens,
+            "total_tokens": grand_total_tokens,
+            "avg_tokens_per_file": round(grand_total_tokens / files_with_passes) if files_with_passes else 0,
+        },
         "files": sorted(files, key=lambda x: x.get("original_filename", "")),
     })
 

@@ -2,7 +2,8 @@
   "permissions": {
     "allow": [
       "WebSearch",
-      "Bash(make help:*)"
+      "Bash(make help:*)",
+      "Bash(ls:*)"
     ]
   }
 }

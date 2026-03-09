@@ -6,7 +6,6 @@ in the pipeline, performs triage, and stores unified results.
 
 Configured via environment variables:
   REDIS_HOST              Redis hostname (default: localhost)
-  QUEUE_NAME              Redis list to pull from
   WORKER_ID               Label for logging
   OUTPUT_DIR              Directory to write per-file JSON results
   AUTO_ACCEPT_THRESHOLD   Confidence threshold for auto-accept (default: 0.85)
@@ -29,7 +28,6 @@ import pytesseract
 
 # -- Config ------------------------------------------------------------------
 REDIS_HOST = os.environ.get("REDIS_HOST", "localhost")
-QUEUE_NAME = os.environ.get("QUEUE_NAME", "queue:pending")
 WORKER_ID = os.environ.get("WORKER_ID", "worker")
 OUTPUT_DIR = Path(os.environ.get("OUTPUT_DIR", "/output"))
 MAX_RETRIES = 3
@@ -113,8 +111,63 @@ r = redis.Redis(host=REDIS_HOST, port=6379, decode_responses=True)
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 
-def get_pipeline():
-    """Get pipeline config from Redis, or set and return default."""
+# -- Run helpers -------------------------------------------------------------
+def run_keys(run_name: str) -> dict:
+    """Return namespaced Redis key names for a given run."""
+    return {
+        "files": f"run:{run_name}:files",
+        "processing": f"run:{run_name}:processing",
+        "failures": f"run:{run_name}:failures",
+        "queue": f"run:{run_name}:queue",
+        "pipeline": f"run:{run_name}:pipeline",
+    }
+
+
+def get_active_run() -> str:
+    """Get the active run name from Redis."""
+    name = r.get("config:active_run")
+    if not name:
+        r.set("config:active_run", "default")
+        return "default"
+    return name
+
+
+def migrate_legacy_keys():
+    """One-time migration: move old flat keys into run:default:* namespace."""
+    if r.exists("files") and not r.exists("runs"):
+        keys = run_keys("default")
+        r.rename("files", keys["files"])
+        if r.exists("processing"):
+            r.rename("processing", keys["processing"])
+        if r.exists("failures"):
+            r.rename("failures", keys["failures"])
+        if r.exists("queue:pending"):
+            r.rename("queue:pending", keys["queue"])
+        # Snapshot current pipeline
+        pipeline = get_pipeline()
+        r.set(keys["pipeline"], json.dumps(pipeline))
+        # Register the run
+        r.hset("runs", "default", json.dumps({
+            "name": "default",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }))
+        r.set("config:active_run", "default")
+        print(f"[{WORKER_ID}] Migrated legacy keys to run:default:*", flush=True)
+    elif not r.exists("runs"):
+        # No legacy data, just initialize
+        r.hset("runs", "default", json.dumps({
+            "name": "default",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }))
+        r.set("config:active_run", "default")
+
+
+def get_pipeline(run_name: str = None) -> list:
+    """Get pipeline config. Checks per-run snapshot first, then global config."""
+    if run_name:
+        raw = r.get(f"run:{run_name}:pipeline")
+        if raw:
+            return json.loads(raw)
     raw = r.get("config:pipeline")
     if raw:
         return json.loads(raw)
@@ -319,7 +372,7 @@ def run_triage(passes: list[dict]) -> tuple[str, str | None]:
 
 
 # -- Processing --------------------------------------------------------------
-def process_file(path_str: str) -> dict:
+def process_file(path_str: str, pipeline: list) -> dict:
     """Run a file through all pipeline models and triage the results."""
     path = Path(path_str)
     if not path.exists():
@@ -327,7 +380,6 @@ def process_file(path_str: str) -> dict:
 
     doc_type = detect_doc_type(path)
     prompt = get_prompt(doc_type)
-    pipeline = get_pipeline()
     passes = []
     num_pages = get_page_count(path)
 
@@ -407,35 +459,40 @@ def process_file(path_str: str) -> dict:
 
 
 # -- Main loop ---------------------------------------------------------------
-print(f"[{WORKER_ID}] Worker started. Listening on queue: {QUEUE_NAME}", flush=True)
-print(f"[{WORKER_ID}] Pipeline: {[m.get('label', m['name']) for m in get_pipeline()]}", flush=True)
+migrate_legacy_keys()
+print(f"[{WORKER_ID}] Worker started.", flush=True)
 
 while True:
-    item = r.brpop(QUEUE_NAME, timeout=30)
+    active_run = get_active_run()
+    keys = run_keys(active_run)
+    pipeline = get_pipeline(active_run)
+
+    item = r.brpop(keys["queue"], timeout=30)
 
     if item is None:
-        depth = r.llen(QUEUE_NAME)
+        depth = r.llen(keys["queue"])
         if depth == 0:
-            print(f"[{WORKER_ID}] Queue empty. Waiting...", flush=True)
+            print(f"[{WORKER_ID}] Queue empty (run: {active_run}). Waiting...", flush=True)
         continue
 
     _, path_str = item
     filename = Path(path_str).name
-    print(f"[{WORKER_ID}] Processing {filename}...", flush=True)
+    print(f"[{WORKER_ID}] Processing {filename} (run: {active_run})...", flush=True)
 
     # Track in-progress
-    r.hset("processing", path_str, json.dumps({
+    r.hset(keys["processing"], path_str, json.dumps({
         "worker": WORKER_ID,
         "filename": filename,
         "started_at": datetime.now(timezone.utc).isoformat(),
     }))
 
     try:
-        record = process_file(path_str)
+        record = process_file(path_str, pipeline)
+        record["run"] = active_run
 
         # Save to Redis
-        r.hdel("processing", path_str)
-        r.hset("files", path_str, json.dumps(record))
+        r.hdel(keys["processing"], path_str)
+        r.hset(keys["files"], path_str, json.dumps(record))
 
         # Save individual JSON file
         out_file = OUTPUT_DIR / f"{Path(path_str).stem}_result.json"
@@ -448,11 +505,11 @@ while True:
         )
 
     except Exception as e:
-        r.hdel("processing", path_str)
-        failure_count = r.hincrby("failures", path_str, 1)
+        r.hdel(keys["processing"], path_str)
+        failure_count = r.hincrby(keys["failures"], path_str, 1)
 
         if failure_count < MAX_RETRIES:
-            r.lpush(QUEUE_NAME, path_str)
+            r.lpush(keys["queue"], path_str)
             print(
                 f"[{WORKER_ID}] x {filename} failed "
                 f"(attempt {failure_count}/{MAX_RETRIES}): {e} -- requeued",
@@ -468,8 +525,9 @@ while True:
                 "reviewed_by": None,
                 "reviewed_at": None,
                 "error": str(e),
+                "run": active_run,
             }
-            r.hset("files", path_str, json.dumps(error_record))
+            r.hset(keys["files"], path_str, json.dumps(error_record))
 
             out_file = OUTPUT_DIR / f"{Path(path_str).stem}_result.json"
             out_file.write_text(json.dumps(error_record, indent=2))

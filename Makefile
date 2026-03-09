@@ -80,7 +80,7 @@ worker-logs: ## Tail worker logs
 
 # -- One-shot jobs ------------------------------------------
 
-enqueue: ## Scan input/ and enqueue new files
+enqueue: ## Scan input/ and enqueue new files (uses active run)
 	$(DC) --profile jobs run --rm enqueuer
 
 export: ## Export results to CSV

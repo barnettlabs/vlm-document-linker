@@ -15,11 +15,15 @@ OUTPUT_DIR = Path(os.environ.get("OUTPUT_DIR", "/output"))
 r = redis.Redis(host=REDIS_HOST, port=6379, decode_responses=True)
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
+# Determine which run to export
+run_name = r.get("config:active_run") or "default"
+files_key = f"run:{run_name}:files"
+
 # Fetch all file records
-data = r.hgetall("files")
+data = r.hgetall(files_key)
 
 if not data:
-    print("No results yet.")
+    print(f"No results yet for run '{run_name}'.")
     exit(0)
 
 records = []
@@ -88,7 +92,7 @@ FIELDNAMES = [
     "error",
 ]
 
-out_path = OUTPUT_DIR / "export.csv"
+out_path = OUTPUT_DIR / f"export_{run_name}.csv"
 with open(out_path, "w", newline="") as f:
     writer = csv.DictWriter(f, fieldnames=FIELDNAMES)
     writer.writeheader()
@@ -100,10 +104,11 @@ for rec in records:
     s = rec["status"]
     statuses[s] = statuses.get(s, 0) + 1
 
-print(f"Exported {len(records)} files to {out_path}")
+print(f"Exported {len(records)} files from run '{run_name}' to {out_path}")
 for status, count in sorted(statuses.items()):
     print(f"  {status}: {count}")
 
-pending = r.llen("queue:pending")
+queue_key = f"run:{run_name}:queue"
+pending = r.llen(queue_key)
 if pending:
     print(f"\nQueue still pending: {pending}")

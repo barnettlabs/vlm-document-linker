@@ -55,18 +55,64 @@ MANAGED_CONTAINERS = [
     "vdl-exporter",
 ]
 
-KNOWN_KEYS = [
-    "queue:pending",
-    "files",
-    "failures",
-    "processing",
-    "config:pipeline",
-]
+
+# -- Run helpers -------------------------------------------------------------
+
+def run_keys(run_name: str) -> dict:
+    """Return namespaced Redis key names for a given run."""
+    return {
+        "files": f"run:{run_name}:files",
+        "processing": f"run:{run_name}:processing",
+        "failures": f"run:{run_name}:failures",
+        "queue": f"run:{run_name}:queue",
+        "pipeline": f"run:{run_name}:pipeline",
+    }
 
 
-def get_all_files() -> list[dict]:
-    """Fetch all file records from Redis."""
-    data = r.hgetall("files")
+def get_active_run() -> str:
+    name = r.get("config:active_run")
+    if not name:
+        r.set("config:active_run", "default")
+        return "default"
+    return name
+
+
+def migrate_legacy_keys():
+    """One-time migration: move old flat keys into run:default:* namespace."""
+    if r.exists("files") and not r.exists("runs"):
+        keys = run_keys("default")
+        r.rename("files", keys["files"])
+        if r.exists("processing"):
+            r.rename("processing", keys["processing"])
+        if r.exists("failures"):
+            r.rename("failures", keys["failures"])
+        if r.exists("queue:pending"):
+            r.rename("queue:pending", keys["queue"])
+        pipeline_raw = r.get("config:pipeline")
+        if pipeline_raw:
+            r.set(keys["pipeline"], pipeline_raw)
+        r.hset("runs", "default", json.dumps({
+            "name": "default",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }))
+        r.set("config:active_run", "default")
+    elif not r.exists("runs"):
+        r.hset("runs", "default", json.dumps({
+            "name": "default",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }))
+        r.set("config:active_run", "default")
+
+
+migrate_legacy_keys()
+
+
+def get_all_files(run_name: str = None) -> list[dict]:
+    """Fetch all file records from Redis for a given run."""
+    if run_name is None:
+        run_name = get_active_run()
+    keys = run_keys(run_name)
+    data = r.hgetall(keys["files"])
     records = []
     for key, val in data.items():
         try:
@@ -459,9 +505,12 @@ def _estimate_costs(prompt_tokens: int, completion_tokens: int) -> list[dict]:
 @app.route("/api/status")
 def api_status():
     """Main API endpoint -- returns all dashboard data."""
-    queue_pending = r.llen("queue:pending")
-    queue_items = r.lrange("queue:pending", 0, 49)
-    files = get_all_files()
+    run_name = request.args.get("run") or get_active_run()
+    keys = run_keys(run_name)
+
+    queue_pending = r.llen(keys["queue"])
+    queue_items = r.lrange(keys["queue"], 0, 49)
+    files = get_all_files(run_name)
 
     auto_accepted = [f for f in files if f.get("status") == "auto_accepted"]
     needs_review = [f for f in files if f.get("status") == "needs_review"]
@@ -469,7 +518,7 @@ def api_status():
     errored = [f for f in files if f.get("status") == "error"]
 
     # Get in-progress files
-    processing_raw = r.hgetall("processing")
+    processing_raw = r.hgetall(keys["processing"])
     processing = []
     for path_key, val in processing_raw.items():
         try:
@@ -513,19 +562,51 @@ def api_status():
         stats["avg_time"] = round(sum(times) / len(times), 2) if times else 0
         stats["avg_confidence"] = round(sum(confidences) / len(confidences), 2) if confidences else 0
 
-    # Grand total token counts across all models
+    # Grand totals across all models
     grand_prompt_tokens = sum(s["total_prompt_tokens"] for s in model_stats.values())
     grand_completion_tokens = sum(s["total_completion_tokens"] for s in model_stats.values())
     grand_total_tokens = sum(s["total_tokens"] for s in model_stats.values())
+    grand_succeeded = sum(s["succeeded"] for s in model_stats.values())
+    grand_failed = sum(s["failed"] for s in model_stats.values())
     files_with_passes = sum(1 for f in files if f.get("passes"))
     avg_prompt = round(grand_prompt_tokens / files_with_passes) if files_with_passes else 0
     avg_completion = round(grand_completion_tokens / files_with_passes) if files_with_passes else 0
+
+    # Aggregate timing and confidence across all passes
+    all_times = []
+    all_confidences = []
+    for rec in files:
+        for p in rec.get("passes", []):
+            if not p.get("error"):
+                if p.get("inference_seconds"):
+                    all_times.append(p["inference_seconds"])
+                if p.get("confidence") is not None:
+                    all_confidences.append(p["confidence"])
+    avg_time = round(sum(all_times) / len(all_times), 2) if all_times else 0
+    total_time = round(sum(all_times), 2)
+    avg_confidence = round(sum(all_confidences) / len(all_confidences), 2) if all_confidences else 0
 
     # Cost estimates: what this workload would cost on hosted vision APIs
     # Prices per million tokens (input / output)
     cost_estimates = _estimate_costs(grand_prompt_tokens, grand_completion_tokens)
 
+    # Collect run list for the selector
+    runs_raw = r.hgetall("runs")
+    runs_list = []
+    for rname, rval in runs_raw.items():
+        try:
+            meta = json.loads(rval)
+            meta["file_count"] = r.hlen(f"run:{rname}:files")
+            meta["queue_depth"] = r.llen(f"run:{rname}:queue")
+            runs_list.append(meta)
+        except Exception:
+            pass
+    runs_list.sort(key=lambda x: x.get("created_at", ""))
+
     return jsonify({
+        "active_run": get_active_run(),
+        "viewing_run": run_name,
+        "runs": runs_list,
         "queue_pending": queue_pending,
         "queue_items": queue_items,
         "processing": processing,
@@ -536,6 +617,13 @@ def api_status():
         "reviewed": len(reviewed),
         "errored": len(errored),
         "model_stats": model_stats,
+        "pass_totals": {
+            "succeeded": grand_succeeded,
+            "failed": grand_failed,
+            "avg_time": avg_time,
+            "total_time": total_time,
+            "avg_confidence": avg_confidence,
+        },
         "token_totals": {
             "prompt_tokens": grand_prompt_tokens,
             "completion_tokens": grand_completion_tokens,
@@ -553,6 +641,11 @@ def api_status():
 
 @app.route("/api/pipeline")
 def get_pipeline():
+    run_name = request.args.get("run")
+    if run_name:
+        raw = r.get(f"run:{run_name}:pipeline")
+        if raw:
+            return jsonify({"pipeline": json.loads(raw)})
     raw = r.get("config:pipeline")
     pipeline = json.loads(raw) if raw else []
     return jsonify({"pipeline": pipeline})
@@ -561,7 +654,12 @@ def get_pipeline():
 @app.route("/api/pipeline", methods=["POST"])
 def set_pipeline():
     pipeline = request.json.get("pipeline", [])
+    run_name = request.json.get("run")
+    # Always update global config
     r.set("config:pipeline", json.dumps(pipeline))
+    # Also update per-run snapshot if a run is specified
+    if run_name and r.hexists("runs", run_name):
+        r.set(f"run:{run_name}:pipeline", json.dumps(pipeline))
     return jsonify({"ok": True})
 
 
@@ -605,6 +703,81 @@ def get_available_models():
         endpoints.append({"label": host, "base_url": f"{url}/v1"})
 
     return jsonify({"models": models, "endpoints": endpoints})
+
+
+# -- Runs --------------------------------------------------------------------
+
+import re as _re
+
+@app.route("/api/runs")
+def list_runs():
+    """List all runs with metadata."""
+    runs_raw = r.hgetall("runs")
+    active = get_active_run()
+    runs_list = []
+    for rname, rval in runs_raw.items():
+        try:
+            meta = json.loads(rval)
+            meta["file_count"] = r.hlen(f"run:{rname}:files")
+            meta["queue_depth"] = r.llen(f"run:{rname}:queue")
+            meta["active"] = (rname == active)
+            runs_list.append(meta)
+        except Exception:
+            pass
+    runs_list.sort(key=lambda x: x.get("created_at", ""))
+    return jsonify({"runs": runs_list, "active_run": active})
+
+
+@app.route("/api/runs", methods=["POST"])
+def create_run():
+    """Create a new named run. Snapshots current pipeline config."""
+    name = request.json.get("name", "").strip()
+    if not name:
+        return jsonify({"error": "name required"}), 400
+    if not _re.match(r'^[a-zA-Z0-9_-]+$', name):
+        return jsonify({"error": "name must be alphanumeric, hyphens, underscores only"}), 400
+    if len(name) > 64:
+        return jsonify({"error": "name too long (max 64 chars)"}), 400
+    if r.hexists("runs", name):
+        return jsonify({"error": f"run '{name}' already exists"}), 409
+
+    # Snapshot the current global pipeline for this run
+    keys = run_keys(name)
+    pipeline_raw = r.get("config:pipeline") or "[]"
+    r.set(keys["pipeline"], pipeline_raw)
+
+    r.hset("runs", name, json.dumps({
+        "name": name,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }))
+    return jsonify({"ok": True, "name": name})
+
+
+@app.route("/api/runs/activate", methods=["POST"])
+def activate_run():
+    """Set the active run."""
+    name = request.json.get("name", "").strip()
+    if not name or not r.hexists("runs", name):
+        return jsonify({"error": "unknown run"}), 404
+    r.set("config:active_run", name)
+    return jsonify({"ok": True, "active_run": name})
+
+
+@app.route("/api/runs/<name>", methods=["DELETE"])
+def delete_run(name):
+    """Delete a run and all its data."""
+    if not r.hexists("runs", name):
+        return jsonify({"error": "unknown run"}), 404
+    if name == get_active_run():
+        return jsonify({"error": "cannot delete the active run — switch to another first"}), 400
+
+    keys = run_keys(name)
+    if r.hlen(keys["processing"]) > 0:
+        return jsonify({"error": "run has files currently being processed"}), 400
+
+    r.delete(keys["files"], keys["processing"], keys["failures"], keys["queue"], keys["pipeline"])
+    r.hdel("runs", name)
+    return jsonify({"ok": True})
 
 
 # -- File Serving ------------------------------------------------------------
@@ -684,7 +857,9 @@ def file_detail():
     if not file_path:
         abort(400)
 
-    raw = r.hget("files", file_path)
+    run_name = request.args.get("run") or get_active_run()
+    keys = run_keys(run_name)
+    raw = r.hget(keys["files"], file_path)
     if not raw:
         abort(404)
 
@@ -696,7 +871,8 @@ def file_detail():
 @app.route("/api/review-queue")
 def review_queue():
     """Get all files needing human review."""
-    files = get_all_files()
+    run_name = request.args.get("run") or get_active_run()
+    files = get_all_files(run_name)
     needs_review = [f for f in files if f.get("status") == "needs_review"]
     return jsonify({
         "files": sorted(needs_review, key=lambda x: x.get("original_filename", "")),
@@ -712,7 +888,9 @@ def submit_review():
     if not file_path or document_id is None:
         return jsonify({"error": "path and document_id required"}), 400
 
-    raw = r.hget("files", file_path)
+    run_name = get_active_run()
+    keys = run_keys(run_name)
+    raw = r.hget(keys["files"], file_path)
     if not raw:
         return jsonify({"error": "file not found"}), 404
 
@@ -722,7 +900,7 @@ def submit_review():
     record["reviewed_by"] = "human"
     record["reviewed_at"] = datetime.now(timezone.utc).isoformat()
 
-    r.hset("files", file_path, json.dumps(record))
+    r.hset(keys["files"], file_path, json.dumps(record))
     return jsonify({"ok": True})
 
 
@@ -730,30 +908,36 @@ def submit_review():
 
 @app.route("/api/queue/clear", methods=["POST"])
 def clear_queue():
-    r.delete("queue:pending")
+    run_name = get_active_run()
+    keys = run_keys(run_name)
+    r.delete(keys["queue"])
     return jsonify({"ok": True})
 
 
 @app.route("/api/queue/remove", methods=["POST"])
 def remove_from_queue():
+    run_name = get_active_run()
+    keys = run_keys(run_name)
     item = request.json.get("item")
     if item:
-        r.lrem("queue:pending", 0, item)
+        r.lrem(keys["queue"], 0, item)
     return jsonify({"ok": True})
 
 
 @app.route("/api/requeue-failed", methods=["POST"])
 def requeue_failed():
     """Re-enqueue all errored files."""
-    files = get_all_files()
+    run_name = get_active_run()
+    keys = run_keys(run_name)
+    files = get_all_files(run_name)
     errored = [f for f in files if f.get("status") == "error"]
     count = 0
     for rec in errored:
         path = rec.get("path") or rec.get("_key")
         if path:
-            r.hdel("files", path)
-            r.hdel("failures", path)
-            r.lpush("queue:pending", path)
+            r.hdel(keys["files"], path)
+            r.hdel(keys["failures"], path)
+            r.lpush(keys["queue"], path)
             count += 1
     return jsonify({"ok": True, "requeued": count})
 
@@ -761,12 +945,14 @@ def requeue_failed():
 @app.route("/api/requeue-file", methods=["POST"])
 def requeue_file():
     """Re-run a specific file through the pipeline."""
+    run_name = get_active_run()
+    keys = run_keys(run_name)
     file_path = request.json.get("path")
     if not file_path:
         return jsonify({"error": "path required"}), 400
-    r.hdel("files", file_path)
-    r.hdel("failures", file_path)
-    r.lpush("queue:pending", file_path)
+    r.hdel(keys["files"], file_path)
+    r.hdel(keys["failures"], file_path)
+    r.lpush(keys["queue"], file_path)
     return jsonify({"ok": True})
 
 
@@ -774,8 +960,19 @@ def requeue_file():
 
 @app.route("/api/keys")
 def api_keys():
-    keys = []
-    for key in KNOWN_KEYS:
+    """Dynamically discover all run-related and config keys."""
+    discovered = set()
+    # Config keys
+    for key in ["config:pipeline", "config:active_run", "runs"]:
+        discovered.add(key)
+    # Per-run keys
+    runs_raw = r.hgetall("runs")
+    for rname in runs_raw:
+        for suffix in ["files", "processing", "failures", "queue", "pipeline"]:
+            discovered.add(f"run:{rname}:{suffix}")
+
+    result = []
+    for key in sorted(discovered):
         key_type = r.type(key)
         if key_type == "hash":
             size = r.hlen(key)
@@ -787,24 +984,69 @@ def api_keys():
             size = 0
         else:
             size = 0
-        keys.append({"key": key, "type": key_type, "size": size})
-    return jsonify({"keys": keys})
+        if size > 0 or key_type != "none":
+            result.append({"key": key, "type": key_type, "size": size})
+    return jsonify({"keys": result})
+
+
+@app.route("/api/keys/view")
+def view_key():
+    """Return the contents of a Redis key."""
+    key = request.args.get("key")
+    if not key:
+        return jsonify({"error": "key required"}), 400
+    key_type = r.type(key)
+    if key_type == "string":
+        val = r.get(key)
+        # Try to parse as JSON for pretty display
+        try:
+            val = json.loads(val)
+        except (json.JSONDecodeError, TypeError):
+            pass
+        return jsonify({"key": key, "type": key_type, "value": val})
+    elif key_type == "hash":
+        raw = r.hgetall(key)
+        parsed = {}
+        for k, v in raw.items():
+            try:
+                parsed[k] = json.loads(v)
+            except (json.JSONDecodeError, TypeError):
+                parsed[k] = v
+        return jsonify({"key": key, "type": key_type, "value": parsed})
+    elif key_type == "list":
+        raw = r.lrange(key, 0, 199)  # Cap at 200 items
+        total = r.llen(key)
+        parsed = []
+        for v in raw:
+            try:
+                parsed.append(json.loads(v))
+            except (json.JSONDecodeError, TypeError):
+                parsed.append(v)
+        return jsonify({"key": key, "type": key_type, "value": parsed, "total": total})
+    elif key_type == "none":
+        return jsonify({"error": "key does not exist"}), 404
+    else:
+        return jsonify({"key": key, "type": key_type, "value": f"(unsupported type: {key_type})"})
 
 
 @app.route("/api/keys/delete", methods=["POST"])
 def delete_key():
     key = request.json.get("key")
-    if key not in KNOWN_KEYS:
-        return jsonify({"error": "unknown key"}), 400
+    if not key:
+        return jsonify({"error": "key required"}), 400
     r.delete(key)
     return jsonify({"ok": True, "deleted": key})
 
 
 @app.route("/api/keys/delete-all", methods=["POST"])
 def delete_all_keys():
-    for key in KNOWN_KEYS:
-        r.delete(key)
-    return jsonify({"ok": True, "deleted": KNOWN_KEYS})
+    """Delete all known keys (full reset)."""
+    runs_raw = r.hgetall("runs")
+    for rname in runs_raw:
+        for suffix in ["files", "processing", "failures", "queue", "pipeline"]:
+            r.delete(f"run:{rname}:{suffix}")
+    r.delete("runs", "config:pipeline", "config:active_run")
+    return jsonify({"ok": True})
 
 
 # -- Docker Containers -------------------------------------------------------

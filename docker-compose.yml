@@ -175,7 +175,6 @@ services:
     command: python worker.py
     environment:
       - REDIS_HOST=redis
-      - QUEUE_NAME=queue:pending
       - WORKER_ID=pipeline
       - OUTPUT_DIR=/output
       - AUTO_ACCEPT_THRESHOLD=0.85

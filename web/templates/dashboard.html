@@ -39,7 +39,7 @@
     justify-content: space-between;
   }
 
-  .header h1 { font-size: 20px; font-weight: 600; letter-spacing: -0.3px; }
+  .header h1 { font-size: 20px; font-weight: 600; letter-spacing: -0.3px; white-space: nowrap; }
 
   .header-actions { display: flex; gap: 12px; align-items: center; }
 
@@ -560,6 +560,38 @@
   .page-label:first-child { padding-top: 0; }
 
 
+  /* Run selector */
+  .run-selector {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .run-selector select {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    font-size: 13px;
+    padding: 5px 8px;
+    font-family: inherit;
+  }
+
+  .run-selector select:focus { outline: 1px solid var(--blue); }
+
+  .run-label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--text-dim);
+    font-weight: 600;
+  }
+
+  .run-divider {
+    color: var(--text-dim);
+    margin: 0 4px;
+  }
+
   .loading {
     text-align: center;
     padding: 60px;
@@ -579,6 +611,16 @@
 <div class="header">
   <h1>VLM Document Linker</h1>
   <div class="header-actions">
+    <div class="run-selector">
+      <span class="run-label">Viewing:</span>
+      <select id="runSelector" onchange="onRunChange()"></select>
+      <button class="btn btn-sm btn-primary" onclick="createRun()">+ New</button>
+      <button class="btn btn-sm btn-danger" id="deleteRunBtn" onclick="deleteRun()">Delete</button>
+      <span class="run-divider">|</span>
+      <span class="run-label">Active:</span>
+      <span id="activeRunLabel" style="font-weight:600; color:#e2e8f0;"></span>
+      <button class="btn btn-sm" id="activateRunBtn" onclick="activateRun()" style="display:none;">Set Viewing as Active</button>
+    </div>
     <a href="/test">Model Test</a>
     <a href="/review">Review Queue</a>
     <span class="refresh-info" id="lastUpdate">--</span>
@@ -592,9 +634,6 @@
 
     <!-- Top-level stats -->
     <div class="stats-grid" id="statsGrid"></div>
-
-    <!-- Model stats -->
-    <div class="model-stats-grid" id="modelStatsGrid"></div>
 
     <!-- Cost estimates -->
     <div class="panel" id="costPanel" style="display:none;">
@@ -715,11 +754,24 @@
   </div>
 </div>
 
+<div class="modal-overlay" id="keyModal">
+  <div class="modal" style="max-width:800px;">
+    <div class="modal-header">
+      <h2 id="keyModalTitle">Key</h2>
+      <button class="btn btn-sm" onclick="document.getElementById('keyModal').classList.remove('active')">&times;</button>
+    </div>
+    <div class="modal-body" style="flex-direction:column;">
+      <pre id="keyModalContent" style="background:var(--surface);padding:12px;border-radius:6px;overflow:auto;max-height:70vh;font-size:12px;line-height:1.5;white-space:pre-wrap;word-break:break-word;margin:0;"></pre>
+    </div>
+  </div>
+</div>
+
 <script>
 let data = null;
 let pipelineConfig = [];
 let availableModels = [];
 let ollamaEndpoints = [];
+let currentRun = '';
 
 const CLAUDE_PIPELINE_MODELS = [
   { name: 'claude-sonnet-4-20250514', label: 'Claude Sonnet 4', price: '$3/$15 per M' },
@@ -734,8 +786,11 @@ const GROQ_PIPELINE_MODELS = [
 
 async function refresh() {
   try {
-    const resp = await fetch('/api/status');
+    const runParam = currentRun ? `?run=${encodeURIComponent(currentRun)}` : '';
+    const resp = await fetch('/api/status' + runParam);
     data = await resp.json();
+    if (!currentRun) currentRun = data.active_run || 'default';
+    renderRunSelector();
     render();
     document.getElementById('lastUpdate').textContent = 'Updated ' + new Date().toLocaleTimeString();
     document.getElementById('loading').style.display = 'none';
@@ -745,9 +800,92 @@ async function refresh() {
   }
 }
 
+function renderRunSelector() {
+  const sel = document.getElementById('runSelector');
+  const runs = data.runs || [];
+  const activeRun = data.active_run || 'default';
+  const viewingRun = currentRun || activeRun;
+
+  sel.innerHTML = runs.map(run => {
+    const label = run.name + ` [${run.file_count} files]`;
+    return `<option value="${run.name}" ${run.name === viewingRun ? 'selected' : ''}>${label}</option>`;
+  }).join('');
+
+  // Active label always reflects the real backend active run
+  document.getElementById('activeRunLabel').textContent = activeRun;
+
+  // Can only delete non-active runs; show activate button when viewing non-active
+  document.getElementById('deleteRunBtn').disabled = (viewingRun === activeRun);
+  document.getElementById('activateRunBtn').style.display = (viewingRun !== activeRun) ? '' : 'none';
+}
+
+async function onRunChange() {
+  const sel = document.getElementById('runSelector');
+  currentRun = sel.value;
+
+  await fetchPipeline();
+  refresh();
+}
+
+async function createRun() {
+  const name = prompt('Enter a name for the new run (letters, numbers, hyphens, underscores):');
+  if (!name) return;
+
+  const resp = await fetch('/api/runs', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  });
+  const result = await resp.json();
+  if (result.error) {
+    alert('Error: ' + result.error);
+    return;
+  }
+
+  // Activate the new run
+  await fetch('/api/runs/activate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  });
+
+  currentRun = name;
+
+  await fetchPipeline();
+  refresh();
+}
+
+async function activateRun() {
+  const name = currentRun;
+  if (!name) return;
+  await fetch('/api/runs/activate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  });
+  refresh();
+}
+
+async function deleteRun() {
+  const name = currentRun;
+  if (!name) return;
+  if (!confirm(`Delete run "${name}" and all its data? This cannot be undone.`)) return;
+
+  const resp = await fetch(`/api/runs/${encodeURIComponent(name)}`, { method: 'DELETE' });
+  const result = await resp.json();
+  if (result.error) {
+    alert('Error: ' + result.error);
+    return;
+  }
+
+  currentRun = '';
+
+  refresh();
+}
+
+
 function render() {
   renderStats();
-  renderModelStats();
   renderCostEstimates();
   renderProcessing();
   renderQueue();
@@ -758,17 +896,23 @@ function render() {
 }
 
 function renderStats() {
+  const pt = data.pass_totals || {};
+  const tt = data.token_totals || {};
+  const models = Object.keys(data.model_stats || {}).join(', ') || 'None';
+
   const cards = [
     { label: 'Queue Pending', value: data.queue_pending, cls: data.queue_pending > 0 ? 'yellow' : 'green', sub: data.queue_pending > 0 ? 'Waiting' : 'Idle' },
     { label: 'Processing', value: data.processing_count || 0, cls: (data.processing_count || 0) > 0 ? 'cyan' : 'green', sub: (data.processing_count || 0) > 0 ? 'In flight' : 'Idle' },
     { label: 'Total Files', value: data.total_files, cls: 'blue', sub: 'Processed' },
-    { label: 'Auto Accepted', value: data.auto_accepted, cls: 'green', sub: 'High confidence consensus' },
+    { label: 'Auto Accepted', value: data.auto_accepted, cls: 'green', sub: 'High confidence' },
     { label: 'Needs Review', value: data.needs_review, cls: data.needs_review > 0 ? 'yellow' : 'green', sub: data.needs_review > 0 ? 'Click Review Queue' : 'All clear' },
-    { label: 'Reviewed', value: data.reviewed, cls: 'blue', sub: 'Manually verified' },
-    { label: 'Errors', value: data.errored, cls: data.errored > 0 ? 'red' : 'green', sub: data.errored > 0 ? 'Check below' : 'None' },
-    { label: 'Input Tokens', value: (data.token_totals?.prompt_tokens || 0).toLocaleString(), cls: 'cyan', sub: `~${(data.token_totals?.avg_prompt_per_file || 0).toLocaleString()} avg/file` },
-    { label: 'Output Tokens', value: (data.token_totals?.completion_tokens || 0).toLocaleString(), cls: 'orange', sub: `~${(data.token_totals?.avg_completion_per_file || 0).toLocaleString()} avg/file` },
-    { label: 'Total Tokens', value: (data.token_totals?.total_tokens || 0).toLocaleString(), cls: 'purple', sub: `~${(data.token_totals?.avg_tokens_per_file || 0).toLocaleString()} avg/file` },
+    { label: 'Errors', value: data.errored, cls: data.errored > 0 ? 'red' : 'green', sub: `${pt.succeeded || 0} passed / ${pt.failed || 0} failed` },
+    { label: 'Avg Confidence', value: pt.avg_confidence || 0, cls: 'green', sub: 'Across all passes' },
+    { label: 'Avg Time', value: `${pt.avg_time || 0}s`, cls: 'cyan', sub: `${pt.total_time || 0}s total` },
+    { label: 'Input Tokens', value: (tt.prompt_tokens || 0).toLocaleString(), cls: 'cyan', sub: `~${(tt.avg_prompt_per_file || 0).toLocaleString()} avg/file` },
+    { label: 'Output Tokens', value: (tt.completion_tokens || 0).toLocaleString(), cls: 'orange', sub: `~${(tt.avg_completion_per_file || 0).toLocaleString()} avg/file` },
+    { label: 'Total Tokens', value: (tt.total_tokens || 0).toLocaleString(), cls: 'purple', sub: `~${(tt.avg_tokens_per_file || 0).toLocaleString()} avg/file` },
+    { label: 'Models', value: Object.keys(data.model_stats || {}).length, cls: 'blue', sub: models },
   ];
 
   document.getElementById('statsGrid').innerHTML = cards.map(c => `
@@ -778,33 +922,6 @@ function renderStats() {
       <div class="sub">${c.sub}</div>
     </div>
   `).join('');
-}
-
-function renderModelStats() {
-  const grid = document.getElementById('modelStatsGrid');
-  const stats = data.model_stats;
-
-  if (!stats || Object.keys(stats).length === 0) {
-    grid.innerHTML = '';
-    return;
-  }
-
-  grid.innerHTML = Object.entries(stats).map(([model, s]) => {
-    const avgPrompt = s.succeeded > 0 ? Math.round(s.total_prompt_tokens / s.succeeded) : 0;
-    const avgCompletion = s.succeeded > 0 ? Math.round(s.total_completion_tokens / s.succeeded) : 0;
-    return `
-    <div class="model-stat-card">
-      <h3>${model}</h3>
-      <div class="model-stat-row"><span>Total passes</span><span class="val">${s.total}</span></div>
-      <div class="model-stat-row"><span>Succeeded</span><span class="val" style="color:var(--green)">${s.succeeded}</span></div>
-      <div class="model-stat-row"><span>Failed</span><span class="val" style="color:var(--red)">${s.failed}</span></div>
-      <div class="model-stat-row"><span>Avg time</span><span class="val">${s.avg_time}s</span></div>
-      <div class="model-stat-row"><span>Avg confidence</span><span class="val">${s.avg_confidence}</span></div>
-      <div class="model-stat-row" style="margin-top:6px;border-top:1px solid var(--border);padding-top:6px;"><span>Total tokens</span><span class="val">${s.total_tokens.toLocaleString()}</span></div>
-      <div class="model-stat-row"><span>Avg prompt tokens</span><span class="val">${avgPrompt.toLocaleString()}</span></div>
-      <div class="model-stat-row"><span>Avg completion tokens</span><span class="val">${avgCompletion.toLocaleString()}</span></div>
-    </div>`;
-  }).join('');
 }
 
 function renderCostEstimates() {
@@ -955,8 +1072,9 @@ function renderFiles() {
 
 async function fetchPipeline() {
   try {
+    const runParam = currentRun ? `?run=${encodeURIComponent(currentRun)}` : '';
     const [pipeResp, modelsResp] = await Promise.all([
-      fetch('/api/pipeline'),
+      fetch('/api/pipeline' + runParam),
       fetch('/api/pipeline/models'),
     ]);
     const pipeData = await pipeResp.json();
@@ -1146,9 +1264,9 @@ async function savePipeline() {
   await fetch('/api/pipeline', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ pipeline: pipelineConfig }),
+    body: JSON.stringify({ pipeline: pipelineConfig, run: currentRun || undefined }),
   });
-  alert('Pipeline saved. New files will use this config.');
+  alert('Pipeline saved for this run. New files will use this config.');
 }
 
 // -- File Modal --
@@ -1293,7 +1411,7 @@ async function renderKeys() {
 
     body.innerHTML = result.keys.map(k => `
       <div class="list-item">
-        <span class="mono">${k.key}</span>
+        <span class="mono" style="cursor:pointer;text-decoration:underline;text-decoration-color:var(--text-dim);" onclick="viewKey('${k.key}')">${k.key}</span>
         <span style="color:var(--text-dim);font-size:12px;">${k.type} &middot; ${k.size} entries</span>
         <button class="btn btn-danger btn-sm" onclick="deleteKey('${k.key}')" ${k.size === 0 ? 'disabled' : ''}>Delete</button>
       </div>
@@ -1334,6 +1452,28 @@ async function requeueFile(path) {
     body: JSON.stringify({ path }),
   });
   refresh();
+}
+
+async function viewKey(key) {
+  const modal = document.getElementById('keyModal');
+  const title = document.getElementById('keyModalTitle');
+  const content = document.getElementById('keyModalContent');
+  title.textContent = key;
+  content.textContent = 'Loading...';
+  modal.classList.add('active');
+
+  try {
+    const resp = await fetch('/api/keys/view?key=' + encodeURIComponent(key));
+    const result = await resp.json();
+    if (result.error) {
+      content.textContent = 'Error: ' + result.error;
+      return;
+    }
+    const info = `Type: ${result.type}` + (result.total != null ? ` | Showing ${Math.min(200, result.total)} of ${result.total}` : '') + '\n\n';
+    content.textContent = info + JSON.stringify(result.value, null, 2);
+  } catch (e) {
+    content.textContent = 'Error: ' + e.message;
+  }
 }
 
 async function deleteKey(key) {

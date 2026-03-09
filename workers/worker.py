@@ -33,7 +33,8 @@ OUTPUT_DIR = Path(os.environ.get("OUTPUT_DIR", "/output"))
 MAX_RETRIES = 3
 AUTO_ACCEPT_THRESHOLD = float(os.environ.get("AUTO_ACCEPT_THRESHOLD", "0.85"))
 
-PROMPT = """/nothink
+PROMPTS = {
+    "lead_paint": """/nothink
 You are extracting a certificate number from a lead inspection certificate.
 
 Find the value of the field labeled "INSPECTION CERTIFICATE NO" in this document.
@@ -51,7 +52,52 @@ Return ONLY valid JSON, no markdown, no explanation:
   "certificate_number": "the extracted value or null",
   "found": true,
   "confidence": 0.95
-}"""
+}""",
+
+    "rental_license": """/nothink
+You are extracting a license number from a rental license document.
+
+Look for the license number in this document. It may appear as:
+- A field labeled "Number" (typically in the top-right area of the document)
+- A field labeled "License #" (sometimes at the bottom of the document)
+
+The same license number may appear in multiple places. Extract the value you find.
+
+Rules:
+- Return the exact value shown in the field, do not modify or reformat it.
+- confidence should reflect how clearly you can read the value (0.0 to 1.0).
+- If you cannot find a license number, set found to false and leave certificate_number as null.
+
+Return ONLY valid JSON, no markdown, no explanation:
+{
+  "certificate_number": "the extracted value or null",
+  "found": true,
+  "confidence": 0.95
+}""",
+}
+
+# Fallback prompt for unknown document types
+DEFAULT_DOC_TYPE = "lead_paint"
+
+
+def detect_doc_type(path: Path) -> str:
+    """Detect document type from directory structure.
+
+    Expected structure: input/<jurisdiction>/<doc_type>/file
+    Where doc_type directory name contains 'lead paint' or 'rental license'.
+    """
+    parts = [p.lower() for p in path.parts]
+    for part in parts:
+        if "rental" in part and "license" in part:
+            return "rental_license"
+        if "lead" in part and "paint" in part:
+            return "lead_paint"
+    return DEFAULT_DOC_TYPE
+
+
+def get_prompt(doc_type: str) -> str:
+    """Return the prompt for a given document type."""
+    return PROMPTS.get(doc_type, PROMPTS[DEFAULT_DOC_TYPE])
 
 DEFAULT_PIPELINE = [
     {"name": "qwen3-vl:2b", "base_url": "http://ollama-gpu0:11434/v1", "label": "Qwen3-VL 2B"},
@@ -113,8 +159,10 @@ def file_to_base64(path: Path, page: int = 0) -> tuple[str, str]:
 
 
 # -- Model calling -----------------------------------------------------------
-def call_model(path: Path, model_config: dict, page: int = 0) -> dict:
+def call_model(path: Path, model_config: dict, page: int = 0, prompt: str = None) -> dict:
     """Send image to a model endpoint and parse the JSON result."""
+    if prompt is None:
+        prompt = get_prompt(detect_doc_type(path))
     client = openai.OpenAI(base_url=model_config["base_url"], api_key="not-needed")
     image_data, media_type = file_to_base64(path, page=page)
 
@@ -133,7 +181,7 @@ def call_model(path: Path, model_config: dict, page: int = 0) -> dict:
                             "url": f"data:{media_type};base64,{image_data}"
                         },
                     },
-                    {"type": "text", "text": PROMPT},
+                    {"type": "text", "text": prompt},
                 ],
             }
         ],
@@ -203,9 +251,17 @@ def process_file(path_str: str) -> dict:
     if not path.exists():
         raise FileNotFoundError(f"File not found: {path_str}")
 
+    doc_type = detect_doc_type(path)
+    prompt = get_prompt(doc_type)
     pipeline = get_pipeline()
     passes = []
     num_pages = get_page_count(path)
+
+    # For rental licenses, scan ALL pages (multiple license numbers may exist).
+    # For lead paint certs, stop after first found (single cert number expected).
+    scan_all_pages = (doc_type == "rental_license")
+
+    print(f"[{WORKER_ID}]   Doc type: {doc_type} | Pages: {num_pages} | Scan all: {scan_all_pages}", flush=True)
 
     for model_config in pipeline:
         label = model_config.get("label", model_config["name"])
@@ -216,7 +272,7 @@ def process_file(path_str: str) -> dict:
             print(f"[{WORKER_ID}]   Running {page_label}...", flush=True)
 
             try:
-                result = call_model(path, model_config, page=page)
+                result = call_model(path, model_config, page=page, prompt=prompt)
                 passes.append(result)
                 print(
                     f"[{WORKER_ID}]   {page_label}: "
@@ -226,10 +282,10 @@ def process_file(path_str: str) -> dict:
                     f"{result.get('inference_seconds')}s)",
                     flush=True,
                 )
-                # Stop scanning pages for this model if field was found
                 if result.get("found") and result.get("certificate_number"):
                     found = True
-                    break
+                    if not scan_all_pages:
+                        break
             except Exception as e:
                 passes.append({
                     "model": model_config["name"],
@@ -248,15 +304,32 @@ def process_file(path_str: str) -> dict:
 
     status, final_value = run_triage(passes)
 
-    return {
+    # For rental licenses with multiple found values, collect all unique numbers
+    all_values = None
+    if doc_type == "rental_license":
+        found_numbers = [
+            p.get("certificate_number")
+            for p in passes
+            if p.get("found") and p.get("certificate_number") and not p.get("error")
+        ]
+        if found_numbers:
+            all_values = list(dict.fromkeys(found_numbers))  # unique, order-preserved
+
+    record = {
         "original_filename": path.name,
         "path": path_str,
+        "doc_type": doc_type,
         "passes": passes,
         "status": status,
         "final_value": final_value,
         "reviewed_by": None,
         "reviewed_at": None,
     }
+
+    if all_values is not None:
+        record["all_values"] = all_values
+
+    return record
 
 
 # -- Main loop ---------------------------------------------------------------

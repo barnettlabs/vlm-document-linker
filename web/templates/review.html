@@ -18,6 +18,7 @@
     --blue: #60a5fa;
     --purple: #a78bfa;
     --cyan: #22d3ee;
+    --orange: #fb923c;
   }
 
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -42,14 +43,8 @@
   }
 
   .header h1 { font-size: 20px; font-weight: 600; letter-spacing: -0.3px; }
-
   .header-actions { display: flex; gap: 12px; align-items: center; }
-
-  .header-actions a {
-    color: var(--blue);
-    text-decoration: none;
-    font-size: 13px;
-  }
+  .header-actions a { color: var(--blue); text-decoration: none; font-size: 13px; }
 
   .review-layout {
     display: flex;
@@ -89,18 +84,25 @@
 
   .file-list-item:hover { background: var(--surface2); }
   .file-list-item.active { background: var(--surface2); border-left: 3px solid var(--blue); }
-
   .file-list-item .file-name { display: block; font-weight: 500; }
-  .file-list-item .file-status {
+
+  .file-list-item .file-meta {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+    margin-top: 4px;
+  }
+
+  .badge {
     display: inline-block;
     font-size: 10px;
     padding: 1px 6px;
     border-radius: 3px;
-    margin-top: 4px;
-    background: rgba(251,191,36,0.15);
-    color: var(--yellow);
     font-weight: 600;
   }
+
+  .badge-review { background: rgba(251,191,36,0.15); color: var(--yellow); }
+  .badge-type { background: rgba(96,165,250,0.15); color: var(--blue); }
 
   /* Main review area */
   .review-main {
@@ -109,11 +111,42 @@
     overflow: hidden;
   }
 
+  .review-image-area {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    background: var(--bg);
+  }
+
+  .page-nav {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 8px;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    font-size: 13px;
+  }
+
+  .page-nav button {
+    padding: 4px 12px;
+    border-radius: 4px;
+    border: 1px solid var(--border);
+    background: var(--surface2);
+    color: var(--text);
+    font-size: 12px;
+    cursor: pointer;
+  }
+
+  .page-nav button:hover { background: var(--border); }
+  .page-nav button:disabled { opacity: 0.3; cursor: default; }
+
   .review-image {
     flex: 1;
     padding: 20px;
     overflow: auto;
-    background: var(--bg);
     display: flex;
     align-items: flex-start;
     justify-content: center;
@@ -127,7 +160,7 @@
 
   /* Review panel (right side) */
   .review-panel {
-    width: 400px;
+    width: 420px;
     flex-shrink: 0;
     border-left: 1px solid var(--border);
     background: var(--surface);
@@ -163,8 +196,9 @@
 
   .pass-card:hover { border-color: var(--blue); }
   .pass-card.selected { border-color: var(--green); background: rgba(52,211,153,0.05); }
+  .pass-card.error-card { border-color: rgba(248,113,113,0.3); }
 
-  .pass-card .pass-model {
+  .pass-card .pass-header {
     font-weight: 600;
     font-size: 13px;
     margin-bottom: 6px;
@@ -187,6 +221,14 @@
     font-size: 11px;
     color: var(--green);
     font-weight: 600;
+  }
+
+  /* Extracted value highlight */
+  .extracted-value {
+    font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--cyan);
   }
 
   /* Decision area */
@@ -223,9 +265,13 @@
     font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
   }
 
-  .decision-input input:focus {
-    outline: none;
-    border-color: var(--blue);
+  .decision-input input:focus { outline: none; border-color: var(--blue); }
+
+  .value-pills {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+    margin-bottom: 12px;
   }
 
   .decision-actions {
@@ -245,24 +291,14 @@
   }
 
   .btn:hover { background: var(--border); }
-
-  .btn-success {
-    border-color: rgba(52,211,153,0.3);
-    color: var(--green);
-    background: rgba(52,211,153,0.1);
-  }
-
+  .btn-success { border-color: rgba(52,211,153,0.3); color: var(--green); background: rgba(52,211,153,0.1); }
   .btn-success:hover { background: rgba(52,211,153,0.2); }
-
   .btn-danger { border-color: rgba(248,113,113,0.3); color: var(--red); }
   .btn-danger:hover { background: rgba(248,113,113,0.15); }
-
   .btn-primary { border-color: rgba(96,165,250,0.3); color: var(--blue); }
   .btn-primary:hover { background: rgba(96,165,250,0.15); }
-
   .btn-sm { padding: 3px 8px; font-size: 11px; }
   .btn:disabled { opacity: 0.4; cursor: default; }
-
   .btn-lg { padding: 10px 20px; font-size: 14px; font-weight: 600; }
 
   .empty-state {
@@ -278,14 +314,21 @@
 
   .mono { font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace; }
 
-  .nav-buttons {
-    display: flex;
-    gap: 8px;
+  .nav-buttons { display: flex; gap: 8px; }
+
+  .review-counter { color: var(--text-dim); font-size: 13px; }
+
+  .confidence-bar {
+    height: 4px;
+    border-radius: 2px;
+    background: var(--border);
+    margin-top: 4px;
   }
 
-  .review-counter {
-    color: var(--text-dim);
-    font-size: 13px;
+  .confidence-bar-fill {
+    height: 100%;
+    border-radius: 2px;
+    transition: width 0.2s;
   }
 </style>
 </head>
@@ -304,13 +347,11 @@
 </div>
 
 <div class="review-layout">
-  <!-- File list -->
   <div class="file-list">
     <div class="file-list-header">Files to Review</div>
     <div id="fileList"></div>
   </div>
 
-  <!-- Main content -->
   <div id="reviewContent" class="review-main">
     <div class="empty-state">Select a file from the list to begin review</div>
   </div>
@@ -319,13 +360,15 @@
 <script>
 let reviewFiles = [];
 let currentIndex = -1;
-let selectedPassValue = null;
+let selectedValue = null;
+let currentPage = 0;
+let totalPages = 1;
 
 async function loadReviewQueue() {
   try {
     const resp = await fetch('/api/review-queue');
-    const data = await resp.json();
-    reviewFiles = data.files || [];
+    const result = await resp.json();
+    reviewFiles = result.files || [];
     renderFileList();
     updateCounter();
 
@@ -350,17 +393,33 @@ function renderFileList() {
     return;
   }
 
-  list.innerHTML = reviewFiles.map((f, i) => `
+  list.innerHTML = reviewFiles.map((f, i) => {
+    const docType = (f.doc_type || '').replace(/_/g, ' ');
+    return `
     <div class="file-list-item ${i === currentIndex ? 'active' : ''}" onclick="selectFile(${i})">
-      <span class="file-name">${f.original_filename}</span>
-      <span class="file-status">NEEDS REVIEW</span>
-    </div>
-  `).join('');
+      <span class="file-name">${escapeHtml(f.original_filename)}</span>
+      <div class="file-meta">
+        <span class="badge badge-review">NEEDS REVIEW</span>
+        ${docType ? `<span class="badge badge-type">${escapeHtml(docType)}</span>` : ''}
+      </div>
+    </div>`;
+  }).join('');
 }
 
 function selectFile(index) {
   currentIndex = index;
-  selectedPassValue = null;
+  selectedValue = null;
+  currentPage = 0;
+
+  // Determine page count from passes
+  const file = reviewFiles[currentIndex];
+  if (file) {
+    const pages = file.passes ? file.passes.map(p => (p.page || 0) + 1) : [1];
+    totalPages = Math.max(...pages, 1);
+  } else {
+    totalPages = 1;
+  }
+
   renderFileList();
   updateCounter();
   renderReview();
@@ -374,6 +433,18 @@ function nextFile() {
   if (currentIndex < reviewFiles.length - 1) selectFile(currentIndex + 1);
 }
 
+function setPage(page) {
+  currentPage = page;
+  renderReview();
+}
+
+function confidenceColor(c) {
+  if (c >= 0.9) return 'var(--green)';
+  if (c >= 0.7) return 'var(--yellow)';
+  if (c >= 0.5) return 'var(--orange)';
+  return 'var(--red)';
+}
+
 function renderReview() {
   const container = document.getElementById('reviewContent');
   const file = reviewFiles[currentIndex];
@@ -383,55 +454,61 @@ function renderReview() {
     return;
   }
 
-  const imgUrl = '/api/file-image?path=' + encodeURIComponent(file.path);
+  const imgUrl = `/api/file-image?path=${encodeURIComponent(file.path)}&page=${currentPage}`;
   const passes = file.passes || [];
 
-  // Collect unique values from passes for quick-select
+  // Collect unique extracted values from successful passes
   const uniqueValues = [...new Set(
-    passes.filter(p => p.license_number && !p.error).map(p => p.license_number)
+    passes
+      .filter(p => !p.error && p.found && p.certificate_number)
+      .map(p => p.certificate_number)
   )];
 
+  // Page nav HTML
+  const pageNav = totalPages > 1 ? `
+    <div class="page-nav">
+      <button onclick="setPage(${currentPage - 1})" ${currentPage === 0 ? 'disabled' : ''}>Prev</button>
+      <span>Page ${currentPage + 1} of ${totalPages}</span>
+      <button onclick="setPage(${currentPage + 1})" ${currentPage >= totalPages - 1 ? 'disabled' : ''}>Next</button>
+    </div>
+  ` : '';
+
   container.innerHTML = `
-    <div class="review-image">
-      <img src="${imgUrl}" alt="${file.original_filename}">
+    <div class="review-image-area">
+      ${pageNav}
+      <div class="review-image">
+        <img src="${imgUrl}" alt="${escapeHtml(file.original_filename)}">
+      </div>
     </div>
     <div class="review-panel">
       <div class="review-section">
         <h3>Document</h3>
-        <div style="font-size:14px;font-weight:500;margin-bottom:4px;">${file.original_filename}</div>
-        <div style="font-size:11px;color:var(--text-dim);word-break:break-all;">${file.path}</div>
+        <div style="font-size:14px;font-weight:500;margin-bottom:4px;">${escapeHtml(file.original_filename)}</div>
+        <div style="font-size:11px;color:var(--text-dim);word-break:break-all;margin-bottom:6px;">${escapeHtml(file.path)}</div>
+        <div style="display:flex;gap:6px;">
+          ${file.doc_type ? `<span class="badge badge-type">${escapeHtml(file.doc_type.replace(/_/g, ' '))}</span>` : ''}
+          ${totalPages > 1 ? `<span class="badge" style="background:rgba(162,139,250,0.15);color:var(--purple);">${totalPages} pages</span>` : ''}
+        </div>
       </div>
 
       <div class="review-section" style="flex:1;overflow-y:auto;">
         <h3>Model Passes (${passes.length})</h3>
-        ${passes.map((p, i) => `
-          <div class="pass-card ${selectedPassValue === p.license_number ? 'selected' : ''}"
-               onclick="selectPassValue('${(p.license_number || '').replace(/'/g, "\\'")}')">
-            <div class="pass-model">
-              <span>${p.model}</span>
-              ${selectedPassValue === p.license_number ? '<span class="select-indicator">SELECTED</span>' : ''}
-            </div>
-            <div class="pass-row"><span>License #</span><span class="val mono">${p.license_number || 'null'}</span></div>
-            <div class="pass-row"><span>Field</span><span class="val">${p.field_label || '-'}</span></div>
-            <div class="pass-row"><span>Confidence</span><span class="val">${p.confidence != null ? p.confidence : '-'}</span></div>
-            <div class="pass-row"><span>Time</span><span class="val">${p.inference_seconds != null ? p.inference_seconds + 's' : '-'}</span></div>
-            ${p.error ? `<div class="pass-row"><span>Error</span><span class="val" style="color:var(--red)">${p.error}</span></div>` : ''}
-          </div>
-        `).join('')}
+        ${passes.map((p, i) => renderPassCard(p, i)).join('')}
       </div>
 
       <div class="decision-area">
-        <h3>Decision</h3>
+        <h3>Decision — Document ID</h3>
         <div class="decision-input">
-          <input type="text" id="decisionValue" placeholder="Enter or select license number"
-                 value="${selectedPassValue || ''}"
+          <input type="text" id="decisionValue"
+                 placeholder="Enter or click a value above"
+                 value="${escapeHtml(selectedValue || '')}"
                  onkeydown="if(event.key==='Enter')submitReview()">
         </div>
         ${uniqueValues.length > 0 ? `
-          <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px;">
+          <div class="value-pills">
             ${uniqueValues.map(v => `
-              <button class="btn btn-sm ${selectedPassValue === v ? 'btn-success' : ''}"
-                      onclick="selectPassValue('${v.replace(/'/g, "\\'")}')">${v}</button>
+              <button class="btn btn-sm ${selectedValue === v ? 'btn-success' : ''}"
+                      onclick="selectValue('${escapeHtml(v).replace(/'/g, "\\'")}')">${escapeHtml(v)}</button>
             `).join('')}
           </div>
         ` : ''}
@@ -445,14 +522,68 @@ function renderReview() {
   `;
 }
 
-function selectPassValue(value) {
-  selectedPassValue = value;
-  document.getElementById('decisionValue').value = value;
+function renderPassCard(p, index) {
+  const isError = !!p.error;
+  const value = p.certificate_number;
+  const isSelected = !isError && selectedValue === value && value != null;
+  const pageLabel = totalPages > 1 ? ` (p${(p.page || 0) + 1})` : '';
+  const conf = p.confidence;
+
+  if (isError) {
+    return `
+      <div class="pass-card error-card">
+        <div class="pass-header">
+          <span>${escapeHtml(p.model || 'unknown')}${pageLabel}</span>
+          <span style="font-size:11px;color:var(--red);">ERROR</span>
+        </div>
+        <div class="pass-row"><span>Error</span><span class="val" style="color:var(--red);font-size:11px;">${escapeHtml(p.error)}</span></div>
+      </div>`;
+  }
+
+  return `
+    <div class="pass-card ${isSelected ? 'selected' : ''}"
+         onclick="selectValue(${value != null ? "'" + escapeHtml(String(value)).replace(/'/g, "\\'") + "'" : 'null'})">
+      <div class="pass-header">
+        <span>${escapeHtml(p.model || 'unknown')}${pageLabel}</span>
+        ${isSelected ? '<span class="select-indicator">SELECTED</span>' : ''}
+      </div>
+      <div class="pass-row">
+        <span>Value</span>
+        <span class="val extracted-value">${value != null ? escapeHtml(String(value)) : '<span style="color:var(--text-dim);font-style:italic;">not found</span>'}</span>
+      </div>
+      <div class="pass-row">
+        <span>Found</span>
+        <span class="val" style="color:${p.found ? 'var(--green)' : 'var(--red)'};">${p.found ? 'Yes' : 'No'}</span>
+      </div>
+      ${conf != null ? `
+        <div class="pass-row">
+          <span>Confidence</span>
+          <span class="val" style="color:${confidenceColor(conf)}">${conf}</span>
+        </div>
+        <div class="confidence-bar">
+          <div class="confidence-bar-fill" style="width:${Math.round(conf * 100)}%;background:${confidenceColor(conf)};"></div>
+        </div>
+      ` : ''}
+      ${p.inference_seconds != null ? `
+        <div class="pass-row"><span>Time</span><span class="val">${p.inference_seconds}s</span></div>
+      ` : ''}
+      ${p.prompt_tokens ? `
+        <div class="pass-row"><span>Tokens</span><span class="val">${(p.prompt_tokens || 0).toLocaleString()} in / ${(p.completion_tokens || 0).toLocaleString()} out</span></div>
+      ` : ''}
+    </div>`;
+}
+
+function selectValue(value) {
+  if (value == null) return;
+  selectedValue = String(value);
+  const input = document.getElementById('decisionValue');
+  if (input) input.value = selectedValue;
   renderReview();
 }
 
 async function submitReview() {
-  const value = document.getElementById('decisionValue').value.trim();
+  const input = document.getElementById('decisionValue');
+  const value = input ? input.value.trim() : '';
   if (!value) return alert('Please enter or select a value');
 
   const file = reviewFiles[currentIndex];
@@ -463,22 +594,7 @@ async function submitReview() {
     body: JSON.stringify({ path: file.path, document_id: value }),
   });
 
-  // Remove from local list and move to next
-  reviewFiles.splice(currentIndex, 1);
-
-  if (currentIndex >= reviewFiles.length) {
-    currentIndex = reviewFiles.length - 1;
-  }
-
-  if (reviewFiles.length === 0) {
-    currentIndex = -1;
-    document.getElementById('reviewContent').innerHTML =
-      '<div class="empty-state">All done! No more files to review.</div>';
-  }
-
-  renderFileList();
-  updateCounter();
-  if (currentIndex >= 0) renderReview();
+  removeCurrentAndAdvance();
 }
 
 async function requeueAndNext() {
@@ -490,25 +606,36 @@ async function requeueAndNext() {
     body: JSON.stringify({ path: file.path }),
   });
 
-  reviewFiles.splice(currentIndex, 1);
+  removeCurrentAndAdvance();
+}
 
-  if (currentIndex >= reviewFiles.length) {
-    currentIndex = reviewFiles.length - 1;
-  }
+function skipFile() {
+  nextFile();
+}
+
+function removeCurrentAndAdvance() {
+  reviewFiles.splice(currentIndex, 1);
 
   if (reviewFiles.length === 0) {
     currentIndex = -1;
     document.getElementById('reviewContent').innerHTML =
       '<div class="empty-state">All done! No more files to review.</div>';
+  } else {
+    if (currentIndex >= reviewFiles.length) {
+      currentIndex = reviewFiles.length - 1;
+    }
+    renderReview();
   }
 
   renderFileList();
   updateCounter();
-  if (currentIndex >= 0) renderReview();
 }
 
-function skipFile() {
-  nextFile();
+function escapeHtml(str) {
+  if (str == null) return '';
+  const div = document.createElement('div');
+  div.textContent = String(str);
+  return div.innerHTML;
 }
 
 // Keyboard shortcuts

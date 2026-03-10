@@ -661,6 +661,7 @@
           </tr></thead>
           <tbody id="costBody"></tbody>
         </table>
+        <div id="timeEstimate" style="display:none;padding:12px 16px;border-top:1px solid var(--border);font-size:13px;color:var(--text-dim);"></div>
       </div>
     </div>
 
@@ -908,7 +909,8 @@ function renderStats() {
     { label: 'Needs Review', value: data.needs_review, cls: data.needs_review > 0 ? 'yellow' : 'green', sub: data.needs_review > 0 ? 'Click Review Queue' : 'All clear' },
     { label: 'Errors', value: data.errored, cls: data.errored > 0 ? 'red' : 'green', sub: `${pt.succeeded || 0} passed / ${pt.failed || 0} failed` },
     { label: 'Avg Confidence', value: pt.avg_confidence || 0, cls: 'green', sub: 'Across all passes' },
-    { label: 'Avg Time', value: `${pt.avg_time || 0}s`, cls: 'cyan', sub: `${pt.total_time || 0}s total` },
+    { label: 'Avg Time / File', value: `${pt.avg_time_per_file || 0}s`, cls: 'cyan', sub: `${pt.total_time || 0}s total` },
+    { label: 'Avg Time / Pass', value: `${pt.avg_time_per_pass || 0}s`, cls: 'cyan', sub: `${pt.succeeded || 0} passes` },
     { label: 'Input Tokens', value: (tt.prompt_tokens || 0).toLocaleString(), cls: 'cyan', sub: `~${(tt.avg_prompt_per_file || 0).toLocaleString()} avg/file` },
     { label: 'Output Tokens', value: (tt.completion_tokens || 0).toLocaleString(), cls: 'orange', sub: `~${(tt.avg_completion_per_file || 0).toLocaleString()} avg/file` },
     { label: 'Total Tokens', value: (tt.total_tokens || 0).toLocaleString(), cls: 'purple', sub: `~${(tt.avg_tokens_per_file || 0).toLocaleString()} avg/file` },
@@ -973,6 +975,30 @@ function renderCostEstimates() {
       ${projCells}
     </tr>`;
   }).join('');
+
+  // Time estimate for current model
+  const timeEl = document.getElementById('timeEstimate');
+  const avgTime = data.pass_totals?.avg_time_per_file || 0;
+  const totalTime = data.pass_totals?.total_time || 0;
+  const models = Object.keys(data.model_stats || {});
+  const modelName = models.length > 0 ? models.join(', ') : 'unknown';
+  const totalFiles = data.total_files || 0;
+
+  if (avgTime > 0) {
+    const totalPasses = (data.pass_totals?.succeeded || 0) + (data.pass_totals?.failed || 0);
+    let timeHtml = `<strong style="color:var(--text);">${modelName}</strong> &mdash; `;
+    timeHtml += `${avgTime}s avg/file &middot; ${formatDuration(totalTime)} total (${totalFiles} files, ${totalPasses} passes)`;
+
+    if (hasProj) {
+      const projTime = avgTime * projDocs;
+      timeHtml += ` &middot; <strong style="color:var(--purple);">${formatDuration(projTime)}</strong> estimated for ${projDocs.toLocaleString()} docs`;
+    }
+
+    timeEl.innerHTML = timeHtml;
+    timeEl.style.display = '';
+  } else {
+    timeEl.style.display = 'none';
+  }
 }
 
 function renderProcessing() {
@@ -1496,6 +1522,14 @@ function escapeHtml(str) {
   const div = document.createElement('div');
   div.textContent = str;
   return div.innerHTML;
+}
+
+function formatDuration(seconds) {
+  if (seconds < 60) return Math.round(seconds) + 's';
+  if (seconds < 3600) return Math.round(seconds / 60) + 'm ' + Math.round(seconds % 60) + 's';
+  const h = Math.floor(seconds / 3600);
+  const m = Math.round((seconds % 3600) / 60);
+  return h + 'h ' + m + 'm';
 }
 
 // Initial load + auto-refresh every 5s

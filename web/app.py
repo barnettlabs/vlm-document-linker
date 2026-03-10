@@ -582,8 +582,9 @@ def api_status():
                     all_times.append(p["inference_seconds"])
                 if p.get("confidence") is not None:
                     all_confidences.append(p["confidence"])
-    avg_time = round(sum(all_times) / len(all_times), 2) if all_times else 0
+    avg_time_per_pass = round(sum(all_times) / len(all_times), 2) if all_times else 0
     total_time = round(sum(all_times), 2)
+    avg_time_per_file = round(total_time / files_with_passes, 2) if files_with_passes else 0
     avg_confidence = round(sum(all_confidences) / len(all_confidences), 2) if all_confidences else 0
 
     # Cost estimates: what this workload would cost on hosted vision APIs
@@ -620,7 +621,8 @@ def api_status():
         "pass_totals": {
             "succeeded": grand_succeeded,
             "failed": grand_failed,
-            "avg_time": avg_time,
+            "avg_time_per_pass": avg_time_per_pass,
+            "avg_time_per_file": avg_time_per_file,
             "total_time": total_time,
             "avg_confidence": avg_confidence,
         },
